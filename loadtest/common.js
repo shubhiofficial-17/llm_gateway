@@ -12,7 +12,7 @@ export const ADMIN_KEY = __ENV.ADMIN_KEY || 'dev-admin-key';
  */
 export function unlimitedDemoTeam() {
   const res = http.put(`${BASE}/admin/teams/demo/limits`,
-    JSON.stringify({ requestsPerMinute: 10_000_000, tokensPerMinute: 2_000_000_000, monthlyBudgetUsd: 1_000_000 }),
+    JSON.stringify({ requestsPerMinute: 10000000, tokensPerMinute: 2000000000, monthlyBudgetUsd: 1000000 }),
     { headers: { 'Content-Type': 'application/json', 'X-Admin-Key': ADMIN_KEY } });
   if (res.status !== 200) {
     throw new Error(`could not lift limits: ${res.status} ${res.body}`);
