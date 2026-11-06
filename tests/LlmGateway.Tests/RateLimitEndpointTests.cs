@@ -59,4 +59,45 @@ public sealed class RateLimitEndpointTests(GatewayFactory baseFactory) : IClassF
             Assert.False(response.Headers.Contains("x-ratelimit-limit-requests"));
         }
     }
+
+    [Fact]
+    public async Task Admin_can_give_one_team_its_own_limit()
+    {
+        var factory = baseFactory.WithWebHostBuilder(_ => { });
+        var admin = factory.CreateClient();
+        admin.DefaultRequestHeaders.Add("X-Admin-Key", GatewayFactory.AdminKey);
+        await admin.PostAsJsonAsync("/admin/teams", new { id = "batch-jobs", name = "Batch jobs" });
+        var key = (await (await admin.PostAsJsonAsync("/admin/teams/batch-jobs/keys", new { label = "t" }))
+            .Content.ReadFromJsonAsync<JsonObject>())!["apiKey"]!.GetValue<string>();
+
+        var set = await admin.PutAsJsonAsync("/admin/teams/batch-jobs/limits", new { requestsPerMinute = 1 });
+        Assert.Equal(HttpStatusCode.OK, set.StatusCode);
+        var team = await admin.GetFromJsonAsync<JsonObject>("/admin/teams/batch-jobs");
+        Assert.Equal(1, team!["requestsPerMinute"]!.GetValue<int>());
+
+        var client = factory.CreateAuthorizedClient(key);
+        var first = await client.PostAsJsonAsync("/v1/chat/completions", Request);
+        var second = await client.PostAsJsonAsync("/v1/chat/completions", Request);
+
+        Assert.Equal(HttpStatusCode.OK, first.StatusCode);
+        Assert.Equal("1", first.Headers.GetValues("x-ratelimit-limit-requests").Single());
+        Assert.Equal(HttpStatusCode.TooManyRequests, second.StatusCode);
+
+        // The default (60/min) still applies to everyone else.
+        var other = await factory.CreateAuthorizedClient().PostAsJsonAsync("/v1/chat/completions", Request);
+        Assert.Equal("60", other.Headers.GetValues("x-ratelimit-limit-requests").Single());
+    }
+
+    [Fact]
+    public async Task Limits_endpoint_rejects_negative_values_and_unknown_teams()
+    {
+        var admin = baseFactory.CreateClient();
+        admin.DefaultRequestHeaders.Add("X-Admin-Key", GatewayFactory.AdminKey);
+
+        var negative = await admin.PutAsJsonAsync($"/admin/teams/{GatewayFactory.TeamId}/limits", new { requestsPerMinute = -1 });
+        var unknown = await admin.PutAsJsonAsync("/admin/teams/ghost/limits", new { requestsPerMinute = 5 });
+
+        Assert.Equal(HttpStatusCode.BadRequest, negative.StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, unknown.StatusCode);
+    }
 }

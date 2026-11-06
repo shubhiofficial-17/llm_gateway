@@ -6,7 +6,8 @@ using NpgsqlTypes;
 
 namespace LlmGateway.Auth;
 
-public sealed record Team(string Id, string Name);
+/// <param name="RequestsPerMinute">Per-team override; null means the gateway default.</param>
+public sealed record Team(string Id, string Name, int? RequestsPerMinute = null);
 
 public static class ApiKeys
 {
@@ -31,6 +32,9 @@ public interface ITeamStore
     Task UpsertTeamAsync(Team team, CancellationToken ct);
 
     Task AddKeyAsync(string teamId, byte[] keyHash, string? label, CancellationToken ct);
+
+    /// <summary>Sets the team's limit overrides. Returns the updated team, or null if it doesn't exist.</summary>
+    Task<Team?> SetLimitsAsync(string teamId, int? requestsPerMinute, CancellationToken ct);
 }
 
 public sealed class PostgresTeamStore(NpgsqlDataSource db) : ITeamStore
@@ -39,7 +43,7 @@ public sealed class PostgresTeamStore(NpgsqlDataSource db) : ITeamStore
     {
         await using var cmd = db.CreateCommand(
             """
-            SELECT t.id, t.name
+            SELECT t.id, t.name, t.requests_per_minute
             FROM api_keys k
             JOIN teams t ON t.id = k.team_id
             WHERE k.key_hash = $1 AND k.revoked_at IS NULL
@@ -47,16 +51,16 @@ public sealed class PostgresTeamStore(NpgsqlDataSource db) : ITeamStore
         cmd.Parameters.Add(new NpgsqlParameter { Value = keyHash, NpgsqlDbType = NpgsqlDbType.Bytea });
 
         await using var reader = await cmd.ExecuteReaderAsync(ct);
-        return await reader.ReadAsync(ct) ? new Team(reader.GetString(0), reader.GetString(1)) : null;
+        return await reader.ReadAsync(ct) ? ReadTeam(reader) : null;
     }
 
     public async Task<Team?> GetTeamAsync(string teamId, CancellationToken ct)
     {
-        await using var cmd = db.CreateCommand("SELECT id, name FROM teams WHERE id = $1");
+        await using var cmd = db.CreateCommand("SELECT id, name, requests_per_minute FROM teams WHERE id = $1");
         cmd.Parameters.Add(new NpgsqlParameter { Value = teamId, NpgsqlDbType = NpgsqlDbType.Text });
 
         await using var reader = await cmd.ExecuteReaderAsync(ct);
-        return await reader.ReadAsync(ct) ? new Team(reader.GetString(0), reader.GetString(1)) : null;
+        return await reader.ReadAsync(ct) ? ReadTeam(reader) : null;
     }
 
     public async Task UpsertTeamAsync(Team team, CancellationToken ct)
@@ -77,6 +81,20 @@ public sealed class PostgresTeamStore(NpgsqlDataSource db) : ITeamStore
         cmd.Parameters.Add(new NpgsqlParameter { Value = (object?)label ?? DBNull.Value, NpgsqlDbType = NpgsqlDbType.Text });
         await cmd.ExecuteNonQueryAsync(ct);
     }
+
+    public async Task<Team?> SetLimitsAsync(string teamId, int? requestsPerMinute, CancellationToken ct)
+    {
+        await using var cmd = db.CreateCommand(
+            "UPDATE teams SET requests_per_minute = $2 WHERE id = $1 RETURNING id, name, requests_per_minute");
+        cmd.Parameters.Add(new NpgsqlParameter { Value = teamId, NpgsqlDbType = NpgsqlDbType.Text });
+        cmd.Parameters.Add(new NpgsqlParameter { Value = (object?)requestsPerMinute ?? DBNull.Value, NpgsqlDbType = NpgsqlDbType.Integer });
+
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        return await reader.ReadAsync(ct) ? ReadTeam(reader) : null;
+    }
+
+    private static Team ReadTeam(NpgsqlDataReader reader) =>
+        new(reader.GetString(0), reader.GetString(1), reader.IsDBNull(2) ? null : reader.GetInt32(2));
 }
 
 /// <summary>Used when no Postgres connection string is configured (tests, quick local runs).</summary>
@@ -98,8 +116,23 @@ public sealed class InMemoryTeamStore : ITeamStore
 
     public Task UpsertTeamAsync(Team team, CancellationToken ct)
     {
-        _teams[team.Id] = team;
+        // Like the Postgres store, an upsert only changes the name; limits are kept.
+        _teams.AddOrUpdate(team.Id, team, (_, existing) => existing with { Name = team.Name });
         return Task.CompletedTask;
+    }
+
+    public Task<Team?> SetLimitsAsync(string teamId, int? requestsPerMinute, CancellationToken ct)
+    {
+        while (_teams.TryGetValue(teamId, out var existing))
+        {
+            var updated = existing with { RequestsPerMinute = requestsPerMinute };
+            if (_teams.TryUpdate(teamId, updated, existing))
+            {
+                return Task.FromResult<Team?>(updated);
+            }
+        }
+
+        return Task.FromResult<Team?>(null);
     }
 
     public Task AddKeyAsync(string teamId, byte[] keyHash, string? label, CancellationToken ct)

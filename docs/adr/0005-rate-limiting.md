@@ -19,4 +19,4 @@ One team's batch job shouldn't be able to use up the provider's rate limit for e
 ## Consequences
 
 - Each chat request adds one Redis round trip, under a millisecond on the same network.
-- Limits are global for now (`Gateway:RateLimits:RequestsPerMinute`). Per-team overrides come next.
+- The default comes from `Gateway:RateLimits:RequestsPerMinute`. A team can be given its own value with `PUT /admin/teams/{id}/limits`. Because team lookups are cached per API key for 60 seconds, a change takes up to a minute to apply.
