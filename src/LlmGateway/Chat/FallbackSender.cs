@@ -1,4 +1,6 @@
+using System.Diagnostics;
 using System.Text.Json.Nodes;
+using LlmGateway.Telemetry;
 using LlmGateway.Providers;
 
 namespace LlmGateway.Chat;
@@ -54,10 +56,22 @@ public sealed class FallbackSender(CircuitBreakers breakers, ILogger<FallbackSen
             var body = (JsonObject)upstreamBody.DeepClone();
             body["model"] = candidate.UpstreamModel;
 
+            // One client span per provider call; the HTTP client span (if any) nests under it.
+            using var activity = GatewayTelemetry.Source.StartActivity($"chat {candidate.UpstreamModel}", ActivityKind.Client);
+            activity?.SetTag("gen_ai.operation.name", "chat");
+            activity?.SetTag("gen_ai.system", provider);
+            activity?.SetTag("gen_ai.request.model", candidate.UpstreamModel);
+            activity?.SetTag("gateway.attempt", attempts);
+
             try
             {
                 var response = await candidate.Provider.SendChatAsync(
                     new ProviderRequest(requestId, candidate.UpstreamModel, body, stream), ct);
+                activity?.SetTag("http.response.status_code", response.StatusCode);
+                if (!response.IsSuccess)
+                {
+                    activity?.SetStatus(ActivityStatusCode.Error, $"HTTP {response.StatusCode}");
+                }
 
                 if (IsProviderFailure(response.StatusCode))
                 {
@@ -81,6 +95,7 @@ public sealed class FallbackSender(CircuitBreakers breakers, ILogger<FallbackSen
             }
             catch (HttpRequestException ex)
             {
+                activity?.SetStatus(ActivityStatusCode.Error, "unreachable");
                 breakers.RecordFailure(provider);
                 logger.LogWarning(ex, "{Model} via {Provider} unreachable for {RequestId}", candidate.Model, provider, requestId);
                 await DisposeAsync(lastFailure);
@@ -89,6 +104,7 @@ public sealed class FallbackSender(CircuitBreakers breakers, ILogger<FallbackSen
             }
             catch (TaskCanceledException) when (!ct.IsCancellationRequested)
             {
+                activity?.SetStatus(ActivityStatusCode.Error, "timeout");
                 breakers.RecordFailure(provider);
                 logger.LogWarning("{Model} via {Provider} timed out for {RequestId}", candidate.Model, provider, requestId);
                 await DisposeAsync(lastFailure);

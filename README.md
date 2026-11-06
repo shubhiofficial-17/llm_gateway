@@ -6,7 +6,7 @@ A self-hosted, OpenAI-compatible gateway that sits between your apps and LLM pro
 
 Apps switch to it by changing one setting, the base URL. Any OpenAI SDK works unchanged.
 
-Built with .NET 8, ASP.NET Core minimal APIs and PostgreSQL.
+Built with .NET 8, ASP.NET Core minimal APIs, PostgreSQL, Redis and OpenTelemetry.
 
 ## Why
 
@@ -33,7 +33,8 @@ A gateway fixes all four in one place.
 | 3c. Circuit breakers | Skip providers that keep failing, probe them again after a cool-down | ✅ Done |
 | 4a. Response cache | Opt-in exact-match cache per team; hits are free and the savings are reported | ✅ Done |
 | 4b. Semantic cache | Embedding-based cache that also answers rephrased questions, scoped so it can't cross contexts | ✅ Done |
-| 5. Observability | OpenTelemetry traces, Grafana cost dashboard, k6 load tests, chaos demo | ⏳ Next |
+| 5a. Telemetry | OpenTelemetry traces and metrics: cost, tokens, latency, time to first token, fallbacks, cache, circuit state; Prometheus `/metrics` | ✅ Done |
+| 5b–5c. Dashboards and load tests | Grafana dashboard, Jaeger traces, k6 load tests, chaos demo | ⏳ Next |
 
 ## Architecture
 
@@ -137,6 +138,7 @@ for chunk in stream:
 | `GET /admin/providers` | Admin key | Circuit breaker state of each provider (`Closed`, `Open`, `HalfOpen`) |
 | `GET /admin/teams/{id}/usage?from=&to=` | Admin key | Requests, tokens and cost per model. Defaults to the current month |
 | `GET /healthz` | None | Liveness |
+| `GET /metrics` | None (internal only) | Prometheus metrics |
 
 Responses include `x-request-id`, `x-gateway-model` and `x-gateway-provider`, plus `x-gateway-fallback-from` when a fallback answered. Send `x-gateway-cache: on` to use the response cache; the response then carries `x-gateway-cache: hit`, `semantic-hit` or `miss`. Non-streaming responses also include `x-gateway-cost-micros`. Errors use OpenAI's error format, so SDKs raise their normal exceptions.
 
@@ -179,6 +181,7 @@ Each significant choice is recorded as an ADR in [`docs/adr`](docs/adr):
 - [0010 – Circuit breakers per provider](docs/adr/0010-circuit-breakers.md)
 - [0011 – Exact-match response cache](docs/adr/0011-exact-match-cache.md)
 - [0012 – Semantic cache: embeddings compared within a narrow bucket](docs/adr/0012-semantic-cache.md)
+- [0013 – Observability with OpenTelemetry](docs/adr/0013-observability.md)
 
 ## Tests
 
@@ -205,6 +208,7 @@ src/LlmGateway
   Limits/      rate limits, token limits and budgets (Redis Lua scripts + in-memory versions)
   Admin/       admin endpoints and admin key filter
   Data/        schema.sql, startup schema initializer, bootstrap seeding
+  Telemetry/   OpenTelemetry metrics and trace source
 tests/LlmGateway.Tests
 docs/adr
 ```

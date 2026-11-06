@@ -6,6 +6,7 @@ using LlmGateway.Auth;
 using LlmGateway.Caching;
 using LlmGateway.Limits;
 using LlmGateway.Providers;
+using LlmGateway.Telemetry;
 using LlmGateway.Usage;
 using Microsoft.AspNetCore.Http.Features;
 
@@ -25,6 +26,7 @@ public static class ChatCompletionsEndpoint
         BudgetGuard budget,
         FallbackSender sender,
         ResponseCaching caching,
+        GatewayTelemetry telemetry,
         TimeProvider time,
         ILoggerFactory loggerFactory)
     {
@@ -134,6 +136,10 @@ public static class ChatCompletionsEndpoint
             if (!string.Equals(served.Model, route.Model, StringComparison.OrdinalIgnoreCase))
             {
                 ctx.Response.Headers["x-gateway-fallback-from"] = route.Model;
+                if (sent.Response is not null)
+                {
+                    telemetry.FallbackUsed(route.Model, served.Model);
+                }
             }
 
             if (sent.Response is null)
@@ -196,7 +202,9 @@ public static class ChatCompletionsEndpoint
                 ctx.Response.Headers["X-Accel-Buffering"] = "no";
                 ctx.Features.Get<IHttpResponseBodyFeature>()?.DisableBuffering();
 
-                var result = await SseRelay.RelayAsync(upstream.Body, ctx.Response.Body, clientWantsUsageChunk, ct);
+                var servedModel = served;
+                var result = await SseRelay.RelayAsync(upstream.Body, ctx.Response.Body, clientWantsUsageChunk, ct,
+                    onFirstEvent: () => telemetry.FirstToken(servedModel.Model, servedModel.Provider.Name, Stopwatch.GetElapsedTime(started)));
                 promptTokens = result.PromptTokens;
                 completionTokens = result.CompletionTokens;
                 completionChars = result.CompletionChars;
@@ -225,6 +233,15 @@ public static class ChatCompletionsEndpoint
 
             await tokenLimit.SettleAsync(reservation, finalPrompt + finalCompletion);
             await budget.SettleAsync(budgetReservation, cost);
+
+            // Enrich the HTTP server span so a trace shows who called what and what it cost.
+            Activity.Current?.SetTag("gateway.team", team.Id);
+            Activity.Current?.SetTag("gen_ai.request.model", route.Model);
+            Activity.Current?.SetTag("gen_ai.response.model", served.Model);
+            Activity.Current?.SetTag("gen_ai.usage.input_tokens", finalPrompt);
+            Activity.Current?.SetTag("gen_ai.usage.output_tokens", finalCompletion);
+            Activity.Current?.SetTag("gateway.cost_micros", cost);
+            Activity.Current?.SetTag("gateway.cache", cacheLookup?.Kind ?? "bypass");
 
             usageRecorder.Record(new UsageEvent(
                 requestId,

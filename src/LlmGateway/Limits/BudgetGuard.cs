@@ -1,5 +1,6 @@
 using System.Globalization;
 using LlmGateway.Auth;
+using LlmGateway.Telemetry;
 using LlmGateway.Usage;
 using Microsoft.Extensions.Options;
 
@@ -22,6 +23,7 @@ public sealed class BudgetGuard(
     IUsageStore ledger,
     IOptionsMonitor<BudgetOptions> options,
     TimeProvider time,
+    GatewayTelemetry telemetry,
     ILogger<BudgetGuard> logger)
 {
     /// <summary>
@@ -57,6 +59,7 @@ public sealed class BudgetGuard(
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             logger.LogError(ex, "Budget check failed for team {TeamId}; refusing the request", team.Id);
+            telemetry.LimitRejected(team.Id, "budget_unavailable");
             await OpenAiError.WriteAsync(ctx, StatusCodes.Status503ServiceUnavailable,
                 "Spend budgets can't be checked right now, so the request was not sent. Try again shortly.",
                 "gateway_error", "budget_unavailable");
@@ -72,6 +75,7 @@ public sealed class BudgetGuard(
         }
 
         // 402 rather than 429: retrying won't help until the budget is raised or the month rolls over.
+        telemetry.LimitRejected(team.Id, "monthly_budget");
         await OpenAiError.WriteAsync(ctx, StatusCodes.Status402PaymentRequired,
             $"Team '{team.Id}' has reached its monthly budget of ${Pricing.MicrosToUsd(limit)}. " +
             $"This request could cost up to ${Pricing.MicrosToUsd(estimateMicros)}.",

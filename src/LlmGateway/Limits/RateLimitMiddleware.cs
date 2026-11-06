@@ -1,5 +1,6 @@
 using System.Globalization;
 using LlmGateway.Auth;
+using LlmGateway.Telemetry;
 using Microsoft.Extensions.Options;
 
 namespace LlmGateway.Limits;
@@ -11,7 +12,8 @@ namespace LlmGateway.Limits;
 /// </summary>
 public sealed class RateLimitMiddleware(RequestDelegate next, ILogger<RateLimitMiddleware> logger)
 {
-    public async Task InvokeAsync(HttpContext ctx, IRateLimiter limiter, IOptionsMonitor<RateLimitOptions> options)
+    public async Task InvokeAsync(
+        HttpContext ctx, IRateLimiter limiter, IOptionsMonitor<RateLimitOptions> options, GatewayTelemetry telemetry)
     {
         if (!IsChatCompletion(ctx.Request))
         {
@@ -44,6 +46,7 @@ public sealed class RateLimitMiddleware(RequestDelegate next, ILogger<RateLimitM
 
         if (!decision.Allowed)
         {
+            telemetry.LimitRejected(team.Id, "requests_per_minute");
             var retrySeconds = Math.Max(1, (int)Math.Ceiling(decision.RetryAfter.TotalSeconds));
             ctx.Response.Headers.RetryAfter = retrySeconds.ToString(CultureInfo.InvariantCulture);
             await OpenAiError.WriteAsync(ctx, StatusCodes.Status429TooManyRequests,
