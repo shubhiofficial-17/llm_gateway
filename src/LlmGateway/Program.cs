@@ -1,0 +1,83 @@
+using LlmGateway.Admin;
+using LlmGateway.Auth;
+using LlmGateway.Chat;
+using LlmGateway.Config;
+using LlmGateway.Data;
+using LlmGateway.Providers;
+using LlmGateway.Usage;
+using Npgsql;
+
+var builder = WebApplication.CreateBuilder(args);
+
+var gatewaySection = builder.Configuration.GetSection(GatewayOptions.SectionName);
+builder.Services.Configure<GatewayOptions>(gatewaySection);
+builder.Services.AddSingleton(TimeProvider.System);
+builder.Services.AddMemoryCache();
+
+// Storage: Postgres when a connection string is set, otherwise in-memory (tests, quick local runs).
+var postgres = builder.Configuration.GetConnectionString("Postgres");
+if (!string.IsNullOrWhiteSpace(postgres))
+{
+    builder.Services.AddSingleton(_ => NpgsqlDataSource.Create(postgres));
+    builder.Services.AddSingleton<ITeamStore, PostgresTeamStore>();
+    builder.Services.AddSingleton<IUsageStore, PostgresUsageStore>();
+    builder.Services.AddHostedService<DatabaseInitializer>(); // registered first so it runs before bootstrap
+}
+else
+{
+    builder.Services.AddSingleton<ITeamStore, InMemoryTeamStore>();
+    builder.Services.AddSingleton<IUsageStore, InMemoryUsageStore>();
+}
+
+builder.Services.AddHostedService<BootstrapService>();
+
+// Usage: request path -> bounded channel -> batched background writer.
+builder.Services.AddSingleton<ChannelUsageRecorder>();
+builder.Services.AddSingleton<IUsageRecorder>(sp => sp.GetRequiredService<ChannelUsageRecorder>());
+builder.Services.AddHostedService<UsageWriterService>();
+
+// One named HttpClient per OpenAI-compatible provider, so each gets its own base URL, timeout and pool.
+var gatewayOptions = gatewaySection.Get<GatewayOptions>() ?? new GatewayOptions();
+foreach (var (name, provider) in gatewayOptions.Providers)
+{
+    if (!string.Equals(provider.Type, "openai-compatible", StringComparison.OrdinalIgnoreCase))
+    {
+        continue;
+    }
+
+    if (string.IsNullOrWhiteSpace(provider.BaseUrl))
+    {
+        throw new InvalidOperationException($"Provider '{name}' needs a BaseUrl.");
+    }
+
+    builder.Services.AddHttpClient(OpenAiCompatibleProvider.HttpClientName(name), client =>
+    {
+        client.BaseAddress = new Uri(provider.BaseUrl.TrimEnd('/') + "/");
+        client.Timeout = TimeSpan.FromSeconds(provider.TimeoutSeconds);
+    });
+}
+
+builder.Services.AddSingleton<ProviderRegistry>();
+
+var app = builder.Build();
+
+app.UseMiddleware<ApiKeyMiddleware>();
+
+app.MapGet("/healthz", () => Results.Ok(new { status = "ok" }));
+
+app.MapPost("/v1/chat/completions", ChatCompletionsEndpoint.HandleAsync);
+
+app.MapGet("/v1/models", (ProviderRegistry registry) => Results.Ok(new
+{
+    @object = "list",
+    data = registry.Models.Select(m => new { id = m.Model, @object = "model", owned_by = m.Provider }),
+}));
+
+app.MapAdminEndpoints();
+
+app.Run();
+
+/// <summary>Exposed for WebApplicationFactory in integration tests.</summary>
+public partial class Program
+{
+}

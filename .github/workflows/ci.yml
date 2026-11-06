@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Restore
+        run: dotnet restore 2>&1 | tee restore.log; exit ${PIPESTATUS[0]}
+
+      - name: Build
+        run: dotnet build --no-restore -c Release 2>&1 | tee build.log; exit ${PIPESTATUS[0]}
+
+      # Integration tests start Postgres with Testcontainers (Docker is available on GitHub runners).
+      - name: Test
+        run: dotnet test --no-build -c Release --logger GitHubActions --logger "console;verbosity=normal" 2>&1 | tee test.log; exit ${PIPESTATUS[0]}
+
+      # On pull requests, post the errors as a comment so they are readable without opening the logs.
+      - name: Report failures on the pull request
+        if: failure() && github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          {
+            echo "### CI failed"
+            echo '```'
+            cat restore.log build.log 2>/dev/null | grep -E "error [A-Z]+[0-9]+" | sed -E 's#^.*/src/##; s#^.*/tests/#tests/#' | sort -u | head -80
+            cat test.log 2>/dev/null | grep -E -A 15 "^\s+Failed [A-Za-z]" | head -200
+            echo '```'
+          } > report.md
+          gh pr comment "${{ github.event.pull_request.number }}" --body-file report.md
+
+  docker-image:
+    runs-on: ubuntu-latest
+    needs: build-and-test
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: docker build -t llm-gateway:ci .

@@ -1,0 +1,25 @@
+
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "LlmGateway", "src\LlmGateway\LlmGateway.csproj", "{460C1511-82B9-4008-AAAF-FAD9212B2B27}"
+EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "LlmGateway.Tests", "tests\LlmGateway.Tests\LlmGateway.Tests.csproj", "{D82C5AB0-551A-45ED-9FDA-6EB2FEC2E8F2}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{460C1511-82B9-4008-AAAF-FAD9212B2B27}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{460C1511-82B9-4008-AAAF-FAD9212B2B27}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{460C1511-82B9-4008-AAAF-FAD9212B2B27}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{460C1511-82B9-4008-AAAF-FAD9212B2B27}.Release|Any CPU.Build.0 = Release|Any CPU
+		{D82C5AB0-551A-45ED-9FDA-6EB2FEC2E8F2}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{D82C5AB0-551A-45ED-9FDA-6EB2FEC2E8F2}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{D82C5AB0-551A-45ED-9FDA-6EB2FEC2E8F2}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{D82C5AB0-551A-45ED-9FDA-6EB2FEC2E8F2}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+EndGlobal
