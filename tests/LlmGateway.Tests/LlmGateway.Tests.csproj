@@ -27,4 +27,8 @@
     <Using Include="Xunit" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Include="../../observability/grafana/dashboards/llm-gateway.json" Link="llm-gateway.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

@@ -34,7 +34,8 @@ A gateway fixes all four in one place.
 | 4a. Response cache | Opt-in exact-match cache per team; hits are free and the savings are reported | ✅ Done |
 | 4b. Semantic cache | Embedding-based cache that also answers rephrased questions, scoped so it can't cross contexts | ✅ Done |
 | 5a. Telemetry | OpenTelemetry traces and metrics: cost, tokens, latency, time to first token, fallbacks, cache, circuit state; Prometheus `/metrics` | ✅ Done |
-| 5b–5c. Dashboards and load tests | Grafana dashboard, Jaeger traces, k6 load tests, chaos demo | ⏳ Next |
+| 5b. Dashboards | Prometheus, Grafana dashboard (spend, latency, cache, fallbacks, circuits) and Jaeger traces in one compose command | ✅ Done |
+| 5c. Load tests | k6 load tests, chaos demo, measured results | ⏳ Next |
 
 ## Architecture
 
@@ -109,6 +110,18 @@ curl http://localhost:8080/admin/teams/demo/usage -H "X-Admin-Key: dev-admin-key
 ```
 
 To use real models, start with your keys set, for example `OPENAI_API_KEY=sk-... ANTHROPIC_API_KEY=sk-ant-... docker compose up --build`. Then call `gpt-4o-mini` or `claude-haiku-5-5` with the same OpenAI-format request.
+
+### Dashboards and traces
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.observability.yml up --build
+```
+
+- **Grafana** at http://localhost:3000 opens the provisioned *LLM Gateway* dashboard. It shows spend by team and model, savings from the cache, error and cache-hit rates, p50/p95 latency and time to first token, circuit breaker state, fallbacks and limit rejections.
+- **Jaeger** at http://localhost:16686 shows a trace per request (service `llm-gateway`), with one span per provider call. A fallback appears as a failed span followed by a successful one.
+- **Prometheus** at http://localhost:9090 scrapes `/metrics` every 5 seconds.
+
+A test checks that every metric the dashboard queries is actually exported, so the dashboard can't silently drift from the code.
 
 ### From an OpenAI SDK
 
@@ -210,6 +223,7 @@ src/LlmGateway
   Data/        schema.sql, startup schema initializer, bootstrap seeding
   Telemetry/   OpenTelemetry metrics and trace source
 tests/LlmGateway.Tests
+observability/  Prometheus config, Grafana provisioning and dashboard
 docs/adr
 ```
 
