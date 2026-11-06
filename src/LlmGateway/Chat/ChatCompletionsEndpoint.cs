@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using LlmGateway.Auth;
+using LlmGateway.Limits;
 using LlmGateway.Providers;
 using LlmGateway.Usage;
 using Microsoft.AspNetCore.Http.Features;
@@ -18,6 +19,7 @@ public static class ChatCompletionsEndpoint
         HttpContext ctx,
         ProviderRegistry registry,
         IUsageRecorder usageRecorder,
+        TokenRateLimit tokenLimit,
         TimeProvider time,
         ILoggerFactory loggerFactory)
     {
@@ -74,6 +76,12 @@ public static class ChatCompletionsEndpoint
             }
 
             upstreamStreamOptions["include_usage"] = true;
+        }
+
+        var reservation = await tokenLimit.TryReserveAsync(ctx, team, tokenLimit.Estimate(body));
+        if (reservation is null)
+        {
+            return; // over the team's token limit; the 429 has been written
         }
 
         var requestId = "req_" + Guid.NewGuid().ToString("N");
@@ -172,6 +180,8 @@ public static class ChatCompletionsEndpoint
             var usageEstimated = billable && (promptTokens is null || completionTokens is null);
             var finalPrompt = billable ? promptTokens ?? TokenEstimator.EstimateMessages(body) : 0;
             var finalCompletion = billable ? completionTokens ?? TokenEstimator.FromChars(completionChars) : 0;
+
+            await tokenLimit.SettleAsync(reservation, finalPrompt + finalCompletion);
 
             usageRecorder.Record(new UsageEvent(
                 requestId,

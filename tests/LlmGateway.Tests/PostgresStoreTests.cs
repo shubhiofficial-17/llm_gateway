@@ -70,12 +70,12 @@ public sealed class PostgresStoreTests(PostgresFixture db) : IClassFixture<Postg
         await store.UpsertTeamAsync(new Team(teamId, "Search"), CancellationToken.None);
         await store.AddKeyAsync(teamId, ApiKeys.Hash(apiKey), null, CancellationToken.None);
 
-        Assert.Equal(new Team(teamId, "Search", 300), await store.SetLimitsAsync(teamId, 300, CancellationToken.None));
+        Assert.Equal(new Team(teamId, "Search", 300, 50_000), await store.SetLimitsAsync(teamId, 300, 50_000, CancellationToken.None));
         await store.UpsertTeamAsync(new Team(teamId, "Search v2"), CancellationToken.None);
-        Assert.Equal(new Team(teamId, "Search v2", 300), await store.FindTeamByKeyHashAsync(ApiKeys.Hash(apiKey), CancellationToken.None));
+        Assert.Equal(new Team(teamId, "Search v2", 300, 50_000), await store.FindTeamByKeyHashAsync(ApiKeys.Hash(apiKey), CancellationToken.None));
 
-        Assert.Equal(new Team(teamId, "Search v2", null), await store.SetLimitsAsync(teamId, null, CancellationToken.None));
-        Assert.Null(await store.SetLimitsAsync("no-such-team", 5, CancellationToken.None));
+        Assert.Equal(new Team(teamId, "Search v2"), await store.SetLimitsAsync(teamId, null, null, CancellationToken.None));
+        Assert.Null(await store.SetLimitsAsync("no-such-team", 5, 5, CancellationToken.None));
     }
 
     [Fact]

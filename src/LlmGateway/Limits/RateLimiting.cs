@@ -7,6 +7,12 @@ public sealed class RateLimitOptions
 {
     /// <summary>Requests per minute allowed for each team. 0 turns the limit off.</summary>
     public int RequestsPerMinute { get; set; } = 60;
+
+    /// <summary>Prompt + completion tokens per minute allowed for each team. 0 turns the limit off.</summary>
+    public int TokensPerMinute { get; set; } = 100_000;
+
+    /// <summary>Completion tokens assumed when a request sets no max_tokens, for reserving against the token limit.</summary>
+    public int DefaultMaxTokensEstimate { get; set; } = 1024;
 }
 
 public sealed record RateLimitDecision(bool Allowed, int Remaining, TimeSpan RetryAfter);
@@ -18,6 +24,9 @@ public interface IRateLimiter
     /// <paramref name="tokensPerSecond"/>. Takes <paramref name="cost"/> tokens if available.
     /// </summary>
     Task<RateLimitDecision> TryAcquireAsync(string key, int capacity, double tokensPerSecond, int cost);
+
+    /// <summary>Returns unused tokens to a bucket, capped at its capacity.</summary>
+    Task RefundAsync(string key, int capacity, int tokens);
 }
 
 /// <summary>Shared across all gateway instances. The check-and-take runs as one Lua script, so it's atomic.</summary>
@@ -25,6 +34,7 @@ public sealed class RedisRateLimiter(IConnectionMultiplexer redis) : IRateLimite
 {
     // StackExchange.Redis caches the script's SHA and sends EVALSHA after the first call.
     private static readonly string Script = EmbeddedScript.Read("token_bucket.lua");
+    private static readonly string RefundScript = EmbeddedScript.Read("token_refund.lua");
 
     public async Task<RateLimitDecision> TryAcquireAsync(string key, int capacity, double tokensPerSecond, int cost)
     {
@@ -39,6 +49,9 @@ public sealed class RedisRateLimiter(IConnectionMultiplexer redis) : IRateLimite
             Remaining: (int)result[1],
             RetryAfter: TimeSpan.FromMilliseconds((long)result[2]));
     }
+
+    public Task RefundAsync(string key, int capacity, int tokens) =>
+        redis.GetDatabase().ScriptEvaluateAsync(RefundScript, [new RedisKey(key)], [capacity, tokens]);
 }
 
 /// <summary>Single-instance fallback used when Redis isn't configured (tests, quick local runs).</summary>
@@ -67,6 +80,19 @@ public sealed class InMemoryRateLimiter(TimeProvider time) : IRateLimiter
             var wait = TimeSpan.FromSeconds((cost - bucket.Tokens) / tokensPerSecond);
             return Task.FromResult(new RateLimitDecision(false, (int)Math.Floor(bucket.Tokens), wait));
         }
+    }
+
+    public Task RefundAsync(string key, int capacity, int tokens)
+    {
+        if (_buckets.TryGetValue(key, out var bucket))
+        {
+            lock (bucket)
+            {
+                bucket.Tokens = Math.Min(capacity, bucket.Tokens + tokens);
+            }
+        }
+
+        return Task.CompletedTask;
     }
 
     private sealed class Bucket(double tokens, DateTimeOffset updatedAt)

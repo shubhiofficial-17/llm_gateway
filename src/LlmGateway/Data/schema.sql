@@ -8,6 +8,7 @@ CREATE TABLE IF NOT EXISTS teams (
 
 -- Per-team limit overrides. NULL means "use the gateway default".
 ALTER TABLE teams ADD COLUMN IF NOT EXISTS requests_per_minute INTEGER;
+ALTER TABLE teams ADD COLUMN IF NOT EXISTS tokens_per_minute INTEGER;
 
 -- Only the SHA-256 hash of an API key is stored. The plaintext key is shown once, at creation.
 CREATE TABLE IF NOT EXISTS api_keys (

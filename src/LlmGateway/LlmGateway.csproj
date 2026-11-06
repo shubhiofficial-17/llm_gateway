@@ -16,6 +16,7 @@
   <ItemGroup>
     <EmbeddedResource Include="Data/schema.sql" LogicalName="schema.sql" />
     <EmbeddedResource Include="Limits/token_bucket.lua" LogicalName="token_bucket.lua" />
+    <EmbeddedResource Include="Limits/token_refund.lua" LogicalName="token_refund.lua" />
   </ItemGroup>
 
   <ItemGroup>

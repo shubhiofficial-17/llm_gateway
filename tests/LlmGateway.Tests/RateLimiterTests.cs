@@ -28,6 +28,22 @@ public sealed class InMemoryRateLimiterTests
     }
 
     [Fact]
+    public async Task Refund_returns_tokens_up_to_capacity()
+    {
+        var limiter = new InMemoryRateLimiter(new FakeTimeProvider());
+
+        Assert.True((await limiter.TryAcquireAsync("k", 100, 0.001, 95)).Allowed);
+        await limiter.RefundAsync("k", 100, 85);
+        var after = await limiter.TryAcquireAsync("k", 100, 0.001, 95);
+
+        Assert.False(after.Allowed);
+        Assert.Equal(90, after.Remaining);
+
+        await limiter.RefundAsync("k", 100, 1_000);
+        Assert.Equal(5, (await limiter.TryAcquireAsync("k", 100, 0.001, 95)).Remaining);
+    }
+
+    [Fact]
     public async Task Keys_have_separate_buckets()
     {
         var limiter = new InMemoryRateLimiter(new FakeTimeProvider());
@@ -89,6 +105,23 @@ public sealed class RedisRateLimiterTests(RedisFixture redis) : IClassFixture<Re
             .Select(_ => limiter.TryAcquireAsync(key, 10, 0.0001, 1)));
 
         Assert.Equal(10, results.Count(r => r.Allowed));
+    }
+
+    [Fact]
+    public async Task Refund_returns_tokens_up_to_capacity()
+    {
+        var limiter = new RedisRateLimiter(redis.Connection);
+        var key = NewKey();
+
+        Assert.True((await limiter.TryAcquireAsync(key, 100, 0.0001, 95)).Allowed);
+        await limiter.RefundAsync(key, 100, 85);
+        var after = await limiter.TryAcquireAsync(key, 100, 0.0001, 95);
+
+        Assert.False(after.Allowed);
+        Assert.Equal(90, after.Remaining);
+
+        await limiter.RefundAsync(key, 100, 1_000);
+        Assert.Equal(5, (await limiter.TryAcquireAsync(key, 100, 0.0001, 95)).Remaining);
     }
 
     [Fact]
