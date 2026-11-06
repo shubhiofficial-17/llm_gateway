@@ -31,7 +31,8 @@ A gateway fixes all four in one place.
 | 3a. Anthropic adapter | Claude models through the same OpenAI API, streaming included | ✅ Done |
 | 3b. Fallback chains | Retry on the next model when a provider is down, overloaded or rate limited | ✅ Done |
 | 3c. Circuit breakers | Skip providers that keep failing, probe them again after a cool-down | ✅ Done |
-| 4. Semantic cache | Embedding-based response cache with a tuned similarity threshold | ⏳ Next |
+| 4a. Response cache | Opt-in exact-match cache per team; hits are free and the savings are reported | ✅ Done |
+| 4b. Semantic cache | Embedding-based cache that also catches rephrased questions | ⏳ Next |
 | 5. Observability | OpenTelemetry traces, Grafana cost dashboard, k6 load tests, chaos demo | Planned |
 
 ## Architecture
@@ -92,7 +93,12 @@ curl http://localhost:8080/v1/chat/completions \
   -H "Authorization: Bearer gw-demo-key" -H "Content-Type: application/json" \
   -d '{"model":"mock-down","messages":[{"role":"user","content":"Are you there?"}]}' -i
 
-# This month's spend for the team
+# Cache: the second identical request is answered from Redis for free
+curl http://localhost:8080/v1/chat/completions \
+  -H "Authorization: Bearer gw-demo-key" -H "Content-Type: application/json" -H "x-gateway-cache: on" \
+  -d '{"model":"mock-1","messages":[{"role":"user","content":"Cache this"}]}' -i
+
+# This month's spend for the team, including cache hits and money saved
 curl http://localhost:8080/admin/teams/demo/usage -H "X-Admin-Key: dev-admin-key"
 ```
 
@@ -127,7 +133,7 @@ for chunk in stream:
 | `GET /admin/teams/{id}/usage?from=&to=` | Admin key | Requests, tokens and cost per model. Defaults to the current month |
 | `GET /healthz` | None | Liveness |
 
-Responses include `x-request-id`, `x-gateway-model` and `x-gateway-provider`, plus `x-gateway-fallback-from` when a fallback answered. Non-streaming responses also include `x-gateway-cost-micros`. Errors use OpenAI's error format, so SDKs raise their normal exceptions.
+Responses include `x-request-id`, `x-gateway-model` and `x-gateway-provider`, plus `x-gateway-fallback-from` when a fallback answered. Send `x-gateway-cache: on` to use the response cache; the response then carries `x-gateway-cache: hit` or `miss`. Non-streaming responses also include `x-gateway-cost-micros`. Errors use OpenAI's error format, so SDKs raise their normal exceptions.
 
 ## Configuration
 
@@ -166,6 +172,7 @@ Each significant choice is recorded as an ADR in [`docs/adr`](docs/adr):
 - [0008 – Serve Claude models through an OpenAI-format adapter](docs/adr/0008-anthropic-adapter.md)
 - [0009 – Fallback chains between models](docs/adr/0009-fallback-chains.md)
 - [0010 – Circuit breakers per provider](docs/adr/0010-circuit-breakers.md)
+- [0011 – Exact-match response cache](docs/adr/0011-exact-match-cache.md)
 
 ## Tests
 
@@ -188,6 +195,7 @@ src/LlmGateway
   Chat/        /v1/chat/completions endpoint, SSE relay
   Providers/   provider interface, OpenAI-compatible, Anthropic and mock providers, model registry
   Usage/       usage recorder (channel), background writer, stores, pricing, token estimates
+  Caching/     response cache (Redis + in-memory), cache keys
   Admin/       admin endpoints and admin key filter
   Data/        schema.sql, startup schema initializer, bootstrap seeding
 tests/LlmGateway.Tests

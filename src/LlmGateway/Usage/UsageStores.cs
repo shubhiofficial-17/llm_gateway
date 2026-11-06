@@ -24,7 +24,8 @@ public sealed class PostgresUsageStore(NpgsqlDataSource db) : IUsageStore
         await using var conn = await db.OpenConnectionAsync(ct);
         await using var writer = await conn.BeginBinaryImportAsync(
             "COPY usage_events (request_id, team_id, model, provider, prompt_tokens, completion_tokens, " +
-            "cost_micros, status_code, latency_ms, streamed, usage_estimated, created_at) FROM STDIN (FORMAT BINARY)",
+            "cost_micros, status_code, latency_ms, streamed, usage_estimated, created_at, cache_hit, saved_micros) " +
+            "FROM STDIN (FORMAT BINARY)",
             ct);
 
         foreach (var e in events)
@@ -42,6 +43,8 @@ public sealed class PostgresUsageStore(NpgsqlDataSource db) : IUsageStore
             await writer.WriteAsync(e.Streamed, NpgsqlDbType.Boolean, ct);
             await writer.WriteAsync(e.UsageEstimated, NpgsqlDbType.Boolean, ct);
             await writer.WriteAsync(e.CreatedAt.UtcDateTime, NpgsqlDbType.TimestampTz, ct);
+            await writer.WriteAsync(e.CacheHit, NpgsqlDbType.Boolean, ct);
+            await writer.WriteAsync(e.SavedMicros, NpgsqlDbType.Bigint, ct);
         }
 
         await writer.CompleteAsync(ct);
@@ -55,7 +58,9 @@ public sealed class PostgresUsageStore(NpgsqlDataSource db) : IUsageStore
                    COUNT(*)::bigint,
                    COALESCE(SUM(prompt_tokens), 0)::bigint,
                    COALESCE(SUM(completion_tokens), 0)::bigint,
-                   COALESCE(SUM(cost_micros), 0)::bigint
+                   COALESCE(SUM(cost_micros), 0)::bigint,
+                   COUNT(*) FILTER (WHERE cache_hit)::bigint,
+                   COALESCE(SUM(saved_micros), 0)::bigint
             FROM usage_events
             WHERE team_id = $1 AND created_at >= $2 AND created_at < $3
             GROUP BY model
@@ -74,7 +79,9 @@ public sealed class PostgresUsageStore(NpgsqlDataSource db) : IUsageStore
                 reader.GetInt64(1),
                 reader.GetInt64(2),
                 reader.GetInt64(3),
-                reader.GetInt64(4)));
+                reader.GetInt64(4),
+                reader.GetInt64(5),
+                reader.GetInt64(6)));
         }
 
         return UsageSummaries.Build(teamId, from, to, rows);
@@ -108,7 +115,9 @@ public sealed class InMemoryUsageStore : IUsageStore
                 g.LongCount(),
                 g.Sum(e => (long)e.PromptTokens),
                 g.Sum(e => (long)e.CompletionTokens),
-                g.Sum(e => e.CostMicros)))
+                g.Sum(e => e.CostMicros),
+                g.LongCount(e => e.CacheHit),
+                g.Sum(e => e.SavedMicros)))
             .OrderByDescending(m => m.CostMicros)
             .ThenBy(m => m.Model, StringComparer.Ordinal)
             .ToList();
@@ -122,6 +131,7 @@ internal static class UsageSummaries
     public static UsageSummary Build(string teamId, DateTimeOffset from, DateTimeOffset to, IReadOnlyList<ModelUsage> rows)
     {
         var cost = rows.Sum(r => r.CostMicros);
-        return new UsageSummary(teamId, from, to, rows.Sum(r => r.Requests), cost, Pricing.MicrosToUsd(cost), rows);
+        return new UsageSummary(teamId, from, to, rows.Sum(r => r.Requests), cost, Pricing.MicrosToUsd(cost),
+            rows.Sum(r => r.CacheHits), Pricing.MicrosToUsd(rows.Sum(r => r.SavedMicros)), rows);
     }
 }

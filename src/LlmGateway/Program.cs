@@ -1,5 +1,6 @@
 using LlmGateway.Admin;
 using LlmGateway.Auth;
+using LlmGateway.Caching;
 using LlmGateway.Chat;
 using LlmGateway.Config;
 using LlmGateway.Data;
@@ -43,16 +44,19 @@ if (!string.IsNullOrWhiteSpace(redis))
         ConnectionMultiplexer.Connect(redis + ",abortConnect=false"));
     builder.Services.AddSingleton<IRateLimiter, RedisRateLimiter>();
     builder.Services.AddSingleton<IBudgetStore, RedisBudgetStore>();
+    builder.Services.AddSingleton<IResponseCache, RedisResponseCache>();
 }
 else
 {
     builder.Services.AddSingleton<IRateLimiter, InMemoryRateLimiter>();
     builder.Services.AddSingleton<IBudgetStore, InMemoryBudgetStore>();
+    builder.Services.AddSingleton<IResponseCache, InMemoryResponseCache>();
 }
 
 builder.Services.AddSingleton<TokenRateLimit>();
 builder.Services.Configure<BudgetOptions>(gatewaySection.GetSection("Budgets"));
 builder.Services.AddSingleton<BudgetGuard>();
+builder.Services.Configure<CacheOptions>(gatewaySection.GetSection("Cache"));
 
 // Usage: request path -> bounded channel -> batched background writer.
 builder.Services.AddSingleton<ChannelUsageRecorder>();
