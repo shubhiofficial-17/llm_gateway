@@ -20,6 +20,7 @@ public static class ChatCompletionsEndpoint
         ProviderRegistry registry,
         IUsageRecorder usageRecorder,
         TokenRateLimit tokenLimit,
+        BudgetGuard budget,
         TimeProvider time,
         ILoggerFactory loggerFactory)
     {
@@ -78,10 +79,22 @@ public static class ChatCompletionsEndpoint
             upstreamStreamOptions["include_usage"] = true;
         }
 
-        var reservation = await tokenLimit.TryReserveAsync(ctx, team, tokenLimit.Estimate(body));
+        // Worst case for this request, held against the team's limits until the real usage is known.
+        var promptEstimate = TokenEstimator.EstimateMessages(body);
+        var maxCompletion = tokenLimit.MaxCompletionTokens(body);
+
+        var reservation = await tokenLimit.TryReserveAsync(ctx, team, promptEstimate + maxCompletion);
         if (reservation is null)
         {
-            return; // over the team's token limit; the 429 has been written
+            return; // over the team's token limit; the error has been written
+        }
+
+        var budgetReservation = await budget.TryReserveAsync(ctx, team,
+            Pricing.CostMicros(route.Options, promptEstimate, maxCompletion));
+        if (budgetReservation is null)
+        {
+            await tokenLimit.SettleAsync(reservation, actualTokens: 0);
+            return; // over budget, or the budget couldn't be checked; the error has been written
         }
 
         var requestId = "req_" + Guid.NewGuid().ToString("N");
@@ -178,10 +191,13 @@ public static class ChatCompletionsEndpoint
             // Bill successful requests, and requests the client abandoned (the provider still charged for them).
             var billable = status is >= 200 and < 300 or ClientClosedRequest;
             var usageEstimated = billable && (promptTokens is null || completionTokens is null);
-            var finalPrompt = billable ? promptTokens ?? TokenEstimator.EstimateMessages(body) : 0;
+            var finalPrompt = billable ? promptTokens ?? promptEstimate : 0;
             var finalCompletion = billable ? completionTokens ?? TokenEstimator.FromChars(completionChars) : 0;
 
+            var cost = Pricing.CostMicros(route.Options, finalPrompt, finalCompletion);
+
             await tokenLimit.SettleAsync(reservation, finalPrompt + finalCompletion);
+            await budget.SettleAsync(budgetReservation, cost);
 
             usageRecorder.Record(new UsageEvent(
                 requestId,
@@ -190,7 +206,7 @@ public static class ChatCompletionsEndpoint
                 route.Provider.Name,
                 finalPrompt,
                 finalCompletion,
-                Pricing.CostMicros(route.Options, finalPrompt, finalCompletion),
+                cost,
                 status,
                 (int)Stopwatch.GetElapsedTime(started).TotalMilliseconds,
                 stream,

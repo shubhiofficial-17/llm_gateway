@@ -1,7 +1,6 @@
 using System.Globalization;
 using System.Text.Json.Nodes;
 using LlmGateway.Auth;
-using LlmGateway.Usage;
 using Microsoft.Extensions.Options;
 
 namespace LlmGateway.Limits;
@@ -22,14 +21,11 @@ public sealed class TokenRateLimit(
     IOptionsMonitor<RateLimitOptions> options,
     ILogger<TokenRateLimit> logger)
 {
-    /// <summary>Upper estimate of the tokens a chat request can use.</summary>
-    public int Estimate(JsonObject chatRequest)
-    {
-        var maxCompletion = ReadInt(chatRequest["max_completion_tokens"])
-                            ?? ReadInt(chatRequest["max_tokens"])
-                            ?? options.CurrentValue.DefaultMaxTokensEstimate;
-        return TokenEstimator.EstimateMessages(chatRequest) + Math.Max(0, maxCompletion);
-    }
+    /// <summary>Most completion tokens the request can produce: its max_tokens, or the configured default.</summary>
+    public int MaxCompletionTokens(JsonObject chatRequest) =>
+        Math.Max(0, ReadInt(chatRequest["max_completion_tokens"])
+                    ?? ReadInt(chatRequest["max_tokens"])
+                    ?? options.CurrentValue.DefaultMaxTokensEstimate);
 
     /// <summary>
     /// Reserves <paramref name="estimatedTokens"/> for the team. Returns the reservation, or null if the

@@ -27,8 +27,8 @@ A gateway fixes all four in one place.
 | 2a. Request rate limits | Per-team requests-per-minute token bucket in Redis (atomic Lua), 429 + Retry-After | ✅ Done |
 | 2b. Per-team overrides | Admin endpoint to give a team its own requests-per-minute limit | ✅ Done |
 | 2c. Token limits | Tokens-per-minute limit: reserve an estimate up front, refund the unused part afterwards | ✅ Done |
-| 2d. Budgets | Monthly spend budgets per team (reserve then settle) | ⏳ Next |
-| 3. Reliability | Anthropic adapter, provider fallback chains, circuit breakers, retries | Planned |
+| 2d. Budgets | Monthly spend budgets per team: reserve then settle, crash-safe, rebuilt from the ledger, fail closed | ✅ Done |
+| 3. Reliability | Anthropic adapter, provider fallback chains, circuit breakers, retries | ⏳ Next |
 | 4. Semantic cache | Embedding-based response cache with a tuned similarity threshold | Planned |
 | 5. Observability | OpenTelemetry traces, Grafana cost dashboard, k6 load tests, chaos demo | Planned |
 
@@ -55,7 +55,7 @@ How a request flows:
 
 1. `ApiKeyMiddleware` hashes the bearer key, looks up the team (cached for 60s) and rejects unknown keys.
 1. `RateLimitMiddleware` takes a token from the team's request bucket in Redis, or returns `429` with `Retry-After`.
-1. The endpoint reserves the request's worst-case token count from the team's token bucket. Once the real count is known, the unused part is refunded.
+1. The endpoint reserves the request's worst-case token count from the team's token bucket, and its worst-case cost from the team's monthly budget. Once the real usage is known, both are settled.
 2. The model name is resolved to a provider and the upstream model name, and the request body is rewritten.
 3. For streaming requests the gateway always asks upstream for a final usage chunk, so it can bill real token counts.
 4. `SseRelay` forwards each event as soon as it arrives, reads usage on the way through and drops the usage chunk if the client didn't ask for it.
@@ -113,7 +113,7 @@ for chunk in stream:
 | `GET /v1/models` | Team key | Models this gateway serves |
 | `POST /admin/teams` | Admin key | Create or rename a team: `{"id":"payments","name":"Payments"}` |
 | `GET /admin/teams/{id}` | Admin key | Team details, including limit overrides |
-| `PUT /admin/teams/{id}/limits` | Admin key | Override limits: `{"requestsPerMinute":300}`. `null` restores the default, `0` means unlimited |
+| `PUT /admin/teams/{id}/limits` | Admin key | Override limits: `{"requestsPerMinute":300,"tokensPerMinute":200000,"monthlyBudgetUsd":50}`. A missing or `null` field restores the default; `0` means unlimited |
 | `POST /admin/teams/{id}/keys` | Admin key | Issue an API key. It is shown once; only its SHA-256 hash is stored |
 | `GET /admin/teams/{id}/usage?from=&to=` | Admin key | Requests, tokens and cost per model. Defaults to the current month |
 | `GET /healthz` | None | Liveness |
@@ -149,6 +149,7 @@ Each significant choice is recorded as an ADR in [`docs/adr`](docs/adr):
 - [0004 – Bill streamed requests from the provider's usage chunk](docs/adr/0004-billing-streamed-requests.md)
 - [0005 – Per-team rate limits with a Redis token bucket](docs/adr/0005-rate-limiting.md)
 - [0006 – Tokens-per-minute limits: reserve an estimate, refund the rest](docs/adr/0006-token-rate-limits.md)
+- [0007 – Monthly budgets: reserve, settle, and fail closed](docs/adr/0007-monthly-budgets.md)
 
 ## Tests
 
@@ -159,6 +160,7 @@ dotnet test
 - **Integration tests** run the whole gateway in memory with `WebApplicationFactory`. They cover auth, streaming, usage recording, error pass-through and admin flows.
 - **Provider tests** run the real HTTP path against a fake upstream. They check model rewriting, `stream_options` injection, the API key header, 429 pass-through and 502 on connection failure.
 - **SSE relay unit tests** cover usage extraction, dropping the usage chunk, comments, CRLF input and a missing trailing newline.
+- **Budget store tests** run the same cases against Redis and the in-memory store: seeding from the ledger, expired reservations, and 500 parallel requests that must not overspend.
 - **Redis rate limiter tests** use Testcontainers. 200 concurrent requests race for 10 tokens and exactly 10 succeed.
 - **Postgres tests** use Testcontainers against a real Postgres 16 instance. They cover the schema, key lookup and batched `COPY` writes with the usage summary.
 
