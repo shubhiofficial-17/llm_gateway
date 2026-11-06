@@ -197,7 +197,7 @@ public static class AnthropicTranslator
                     await WriteAsync(output, Chunk(id, created, model, new JsonObject { ["role"] = "assistant", ["content"] = "" }, null), ct);
                     break;
 
-                case "content_block_delta" when evt["delta"]?["type"]?.GetValue<string>() == "text_delta":
+                case "content_block_delta" when IsTextDelta(evt):
                     var text = evt["delta"]?["text"]?.GetValue<string>() ?? "";
                     await WriteAsync(output, Chunk(id, created, model, new JsonObject { ["content"] = text }, null), ct);
                     break;
@@ -241,6 +241,9 @@ public static class AnthropicTranslator
 
         await WriteAsync(output, "[DONE]", ct);
     }
+
+    private static bool IsTextDelta(JsonObject evt) =>
+        evt["delta"] is JsonObject delta && delta["type"]?.GetValue<string>() == "text_delta";
 
     internal static string? FinishReason(string? stopReason) => stopReason switch
     {
