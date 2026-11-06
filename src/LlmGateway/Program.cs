@@ -3,9 +3,11 @@ using LlmGateway.Auth;
 using LlmGateway.Chat;
 using LlmGateway.Config;
 using LlmGateway.Data;
+using LlmGateway.Limits;
 using LlmGateway.Providers;
 using LlmGateway.Usage;
 using Npgsql;
+using StackExchange.Redis;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -30,6 +32,21 @@ else
 }
 
 builder.Services.AddHostedService<BootstrapService>();
+
+// Rate limits: Redis when configured (shared by all instances), otherwise in-process.
+builder.Services.Configure<RateLimitOptions>(gatewaySection.GetSection("RateLimits"));
+var redis = builder.Configuration.GetConnectionString("Redis");
+if (!string.IsNullOrWhiteSpace(redis))
+{
+    // abortConnect=false: start even if Redis is down; the limiter fails open until it's back.
+    builder.Services.AddSingleton<IConnectionMultiplexer>(_ =>
+        ConnectionMultiplexer.Connect(redis + ",abortConnect=false"));
+    builder.Services.AddSingleton<IRateLimiter, RedisRateLimiter>();
+}
+else
+{
+    builder.Services.AddSingleton<IRateLimiter, InMemoryRateLimiter>();
+}
 
 // Usage: request path -> bounded channel -> batched background writer.
 builder.Services.AddSingleton<ChannelUsageRecorder>();
@@ -62,6 +79,7 @@ builder.Services.AddSingleton<ProviderRegistry>();
 var app = builder.Build();
 
 app.UseMiddleware<ApiKeyMiddleware>();
+app.UseMiddleware<RateLimitMiddleware>();
 
 app.MapGet("/healthz", () => Results.Ok(new { status = "ok" }));
 

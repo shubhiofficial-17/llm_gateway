@@ -24,7 +24,8 @@ A gateway fixes all four in one place.
 | Milestone | Scope | Status |
 |---|---|---|
 | 1. Core proxy | OpenAI-compatible API, SSE streaming, per-team API keys, usage and cost ledger, mock provider, Docker Compose, CI | ✅ Done |
-| 2. Budgets and rate limits | Per-team RPM/TPM token buckets and monthly budgets in Redis (atomic Lua, reserve then settle) | ⏳ Next |
+| 2a. Request rate limits | Per-team requests-per-minute token bucket in Redis (atomic Lua), 429 + Retry-After | ✅ Done |
+| 2b–2d. Limits and budgets | Per-team overrides, tokens-per-minute limits, monthly budgets (reserve then settle) | ⏳ Next |
 | 3. Reliability | Anthropic adapter, provider fallback chains, circuit breakers, retries | Planned |
 | 4. Semantic cache | Embedding-based response cache with a tuned similarity threshold | Planned |
 | 5. Observability | OpenTelemetry traces, Grafana cost dashboard, k6 load tests, chaos demo | Planned |
@@ -36,7 +37,8 @@ flowchart LR
     A[Client apps<br/>any OpenAI SDK] -->|Bearer gw_...| G
     subgraph G[LLM Gateway]
         direction TB
-        Auth[API key auth<br/>hash lookup + cache] --> Route[Model router]
+        Auth[API key auth<br/>hash lookup + cache] --> RL[Rate limiter<br/>Redis token bucket]
+        RL --> Route[Model router]
         Route --> Relay[Streaming relay<br/>reads usage in flight]
         Relay --> Rec[Usage recorder<br/>bounded channel]
     end
@@ -44,11 +46,13 @@ flowchart LR
     Route --> P2[Ollama / any OpenAI-compatible]
     Route --> P3[Mock provider]
     Rec -->|batched binary COPY| DB[(Postgres<br/>usage ledger)]
+    RL <--> R[(Redis)]
 ```
 
 How a request flows:
 
 1. `ApiKeyMiddleware` hashes the bearer key, looks up the team (cached for 60s) and rejects unknown keys.
+1. `RateLimitMiddleware` takes a token from the team's bucket in Redis, or returns `429` with `Retry-After`.
 2. The model name is resolved to a provider and the upstream model name, and the request body is rewritten.
 3. For streaming requests the gateway always asks upstream for a final usage chunk, so it can bill real token counts.
 4. `SseRelay` forwards each event as soon as it arrives, reads usage on the way through and drops the usage chunk if the client didn't ask for it.
@@ -138,6 +142,7 @@ Each significant choice is recorded as an ADR in [`docs/adr`](docs/adr):
 - [0002 – Write usage asynchronously, store money as integer micro-dollars](docs/adr/0002-async-usage-ledger.md)
 - [0003 – Store API keys as SHA-256 hashes](docs/adr/0003-api-key-hashing.md)
 - [0004 – Bill streamed requests from the provider's usage chunk](docs/adr/0004-billing-streamed-requests.md)
+- [0005 – Per-team rate limits with a Redis token bucket](docs/adr/0005-rate-limiting.md)
 
 ## Tests
 
@@ -148,6 +153,7 @@ dotnet test
 - **Integration tests** run the whole gateway in memory with `WebApplicationFactory`. They cover auth, streaming, usage recording, error pass-through and admin flows.
 - **Provider tests** run the real HTTP path against a fake upstream. They check model rewriting, `stream_options` injection, the API key header, 429 pass-through and 502 on connection failure.
 - **SSE relay unit tests** cover usage extraction, dropping the usage chunk, comments, CRLF input and a missing trailing newline.
+- **Redis rate limiter tests** use Testcontainers. 200 concurrent requests race for 10 tokens and exactly 10 succeed.
 - **Postgres tests** use Testcontainers against a real Postgres 16 instance. They cover the schema, key lookup and batched `COPY` writes with the usage summary.
 
 ## Project layout
