@@ -114,7 +114,7 @@ public static class ChatCompletionsEndpoint
             served = sent.Served;
             ctx.Response.Headers["x-gateway-model"] = served.Model;
             ctx.Response.Headers["x-gateway-provider"] = served.Provider.Name;
-            if (sent.Attempts > 1)
+            if (!string.Equals(served.Model, route.Model, StringComparison.OrdinalIgnoreCase))
             {
                 ctx.Response.Headers["x-gateway-fallback-from"] = route.Model;
             }
@@ -122,6 +122,12 @@ public static class ChatCompletionsEndpoint
             if (sent.Response is null)
             {
                 status = sent.FailureStatus;
+                if (sent.RetryAfter is { } retryAfter)
+                {
+                    ctx.Response.Headers.RetryAfter =
+                        Math.Max(1, (int)Math.Ceiling(retryAfter.TotalSeconds)).ToString(System.Globalization.CultureInfo.InvariantCulture);
+                }
+
                 await OpenAiError.WriteAsync(ctx, status, sent.FailureMessage!, "gateway_error", sent.FailureCode!);
                 return;
             }

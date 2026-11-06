@@ -30,8 +30,8 @@ A gateway fixes all four in one place.
 | 2d. Budgets | Monthly spend budgets per team: reserve then settle, crash-safe, rebuilt from the ledger, fail closed | ✅ Done |
 | 3a. Anthropic adapter | Claude models through the same OpenAI API, streaming included | ✅ Done |
 | 3b. Fallback chains | Retry on the next model when a provider is down, overloaded or rate limited | ✅ Done |
-| 3c. Circuit breakers | Skip providers that are known to be failing | ⏳ Next |
-| 4. Semantic cache | Embedding-based response cache with a tuned similarity threshold | Planned |
+| 3c. Circuit breakers | Skip providers that keep failing, probe them again after a cool-down | ✅ Done |
+| 4. Semantic cache | Embedding-based response cache with a tuned similarity threshold | ⏳ Next |
 | 5. Observability | OpenTelemetry traces, Grafana cost dashboard, k6 load tests, chaos demo | Planned |
 
 ## Architecture
@@ -59,7 +59,7 @@ How a request flows:
 1. `ApiKeyMiddleware` hashes the bearer key, looks up the team (cached for 60s) and rejects unknown keys.
 1. `RateLimitMiddleware` takes a token from the team's request bucket in Redis, or returns `429` with `Retry-After`.
 1. The endpoint reserves the request's worst-case token count from the team's token bucket, and its worst-case cost from the team's monthly budget. Once the real usage is known, both are settled.
-1. The model name is resolved to a provider, an upstream model name and a fallback chain.
+1. The model name is resolved to a provider, an upstream model name and a fallback chain. Providers whose circuit breaker is open are skipped.
 3. For streaming requests the gateway always asks upstream for a final usage chunk, so it can bill real token counts.
 4. `SseRelay` forwards each event as soon as it arrives, reads usage on the way through and drops the usage chunk if the client didn't ask for it.
 5. A `UsageEvent` goes into a bounded channel. A background service writes events to Postgres in batches with binary `COPY`, off the request path.
@@ -123,6 +123,7 @@ for chunk in stream:
 | `GET /admin/teams/{id}` | Admin key | Team details, including limit overrides |
 | `PUT /admin/teams/{id}/limits` | Admin key | Override limits: `{"requestsPerMinute":300,"tokensPerMinute":200000,"monthlyBudgetUsd":50}`. A missing or `null` field restores the default; `0` means unlimited |
 | `POST /admin/teams/{id}/keys` | Admin key | Issue an API key. It is shown once; only its SHA-256 hash is stored |
+| `GET /admin/providers` | Admin key | Circuit breaker state of each provider (`Closed`, `Open`, `HalfOpen`) |
 | `GET /admin/teams/{id}/usage?from=&to=` | Admin key | Requests, tokens and cost per model. Defaults to the current month |
 | `GET /healthz` | None | Liveness |
 
@@ -164,6 +165,7 @@ Each significant choice is recorded as an ADR in [`docs/adr`](docs/adr):
 - [0007 – Monthly budgets: reserve, settle, and fail closed](docs/adr/0007-monthly-budgets.md)
 - [0008 – Serve Claude models through an OpenAI-format adapter](docs/adr/0008-anthropic-adapter.md)
 - [0009 – Fallback chains between models](docs/adr/0009-fallback-chains.md)
+- [0010 – Circuit breakers per provider](docs/adr/0010-circuit-breakers.md)
 
 ## Tests
 

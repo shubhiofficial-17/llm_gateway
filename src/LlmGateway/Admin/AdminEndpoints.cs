@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using LlmGateway.Auth;
 using LlmGateway.Config;
+using LlmGateway.Providers;
 using LlmGateway.Usage;
 using Microsoft.Extensions.Options;
 
@@ -90,6 +91,10 @@ public static partial class AdminEndpoints
             return Results.Ok(new CreateKeyResponse(teamId, apiKey, request?.Label,
                 "Store this key now. Only its hash is kept, so it cannot be shown again."));
         });
+
+        // Circuit state of every provider, as seen by this gateway instance.
+        admin.MapGet("/providers", (ProviderRegistry registry, CircuitBreakers breakers) =>
+            Results.Ok(registry.ProviderNames.Select(breakers.Health)));
 
         admin.MapGet("/teams/{teamId}/usage", async (
             string teamId, DateTimeOffset? from, DateTimeOffset? to,
