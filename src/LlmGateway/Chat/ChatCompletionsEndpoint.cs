@@ -8,7 +8,6 @@ using LlmGateway.Limits;
 using LlmGateway.Providers;
 using LlmGateway.Usage;
 using Microsoft.AspNetCore.Http.Features;
-using Microsoft.Extensions.Options;
 
 namespace LlmGateway.Chat;
 
@@ -25,8 +24,7 @@ public static class ChatCompletionsEndpoint
         TokenRateLimit tokenLimit,
         BudgetGuard budget,
         FallbackSender sender,
-        IResponseCache cache,
-        IOptionsMonitor<CacheOptions> cacheOptions,
+        ResponseCaching caching,
         TimeProvider time,
         ILoggerFactory loggerFactory)
     {
@@ -84,15 +82,14 @@ public static class ChatCompletionsEndpoint
             upstreamStreamOptions["include_usage"] = true;
         }
 
-        // Exact-match cache (opt-in, non-streaming only). A hit costs nothing and skips the limits below.
-        string? cacheKey = null;
-        if (!stream && CacheRequested(ctx.Request, cacheOptions.CurrentValue))
+        // Response cache (opt-in, non-streaming only). A hit costs nothing and skips the limits below.
+        CacheLookup? cacheLookup = null;
+        if (caching.IsRequested(ctx.Request, stream))
         {
-            cacheKey = CacheKeys.For(team.Id, body);
-            var hit = await TryGetCachedAsync(cache, cacheKey, log);
-            if (hit is not null)
+            cacheLookup = await caching.LookupAsync(team, body, ct);
+            if (cacheLookup.Hit is not null)
             {
-                await ServeCacheHitAsync(ctx, hit, team, usageRecorder, time);
+                await ServeCacheHitAsync(ctx, cacheLookup, team, usageRecorder, time);
                 return;
             }
 
@@ -184,11 +181,10 @@ public static class ChatCompletionsEndpoint
                     await buffer.CopyToAsync(ctx.Response.Body, ct);
 
                     // Only answers from the requested model are cached, never a fallback's.
-                    if (cacheKey is not null && served == route && promptTokens is { } cp && completionTokens is { } cc)
+                    if (cacheLookup is not null && served == route && promptTokens is { } cp && completionTokens is { } cc)
                     {
-                        var entry = new CachedCompletion(Encoding.UTF8.GetString(buffer.ToArray()), served.Model, cp, cc,
-                            Pricing.CostMicros(served.Options, cp, cc));
-                        await TrySetCachedAsync(cache, cacheKey, entry, TimeSpan.FromSeconds(cacheOptions.CurrentValue.TtlSeconds), log);
+                        await caching.StoreAsync(cacheLookup, new CachedCompletion(
+                            Encoding.UTF8.GetString(buffer.ToArray()), served.Model, cp, cc, Pricing.CostMicros(served.Options, cp, cc)));
                     }
 
                     return;
@@ -246,47 +242,18 @@ public static class ChatCompletionsEndpoint
         }
     }
 
-    /// <summary>The x-gateway-cache request header ("on" / "off") overrides the configured default.</summary>
-    private static bool CacheRequested(HttpRequest request, CacheOptions options) =>
-        request.Headers["x-gateway-cache"].ToString().Trim().ToLowerInvariant() switch
-        {
-            "on" or "true" => true,
-            "off" or "false" => false,
-            _ => options.DefaultOn,
-        };
-
-    // The cache is an optimisation: if Redis is unavailable, carry on without it.
-    private static async Task<CachedCompletion?> TryGetCachedAsync(IResponseCache cache, string key, ILogger log)
-    {
-        try
-        {
-            return await cache.GetAsync(key);
-        }
-        catch (Exception ex)
-        {
-            log.LogWarning(ex, "Response cache read failed; treating as a miss");
-            return null;
-        }
-    }
-
-    private static async Task TrySetCachedAsync(IResponseCache cache, string key, CachedCompletion entry, TimeSpan ttl, ILogger log)
-    {
-        try
-        {
-            await cache.SetAsync(key, entry, ttl);
-        }
-        catch (Exception ex)
-        {
-            log.LogWarning(ex, "Response cache write failed");
-        }
-    }
-
     private static async Task ServeCacheHitAsync(
-        HttpContext ctx, CachedCompletion hit, Team team, IUsageRecorder usageRecorder, TimeProvider time)
+        HttpContext ctx, CacheLookup lookup, Team team, IUsageRecorder usageRecorder, TimeProvider time)
     {
+        var hit = lookup.Hit!;
         var requestId = "req_" + Guid.NewGuid().ToString("N");
         ctx.Response.Headers["x-request-id"] = requestId;
-        ctx.Response.Headers["x-gateway-cache"] = "hit";
+        ctx.Response.Headers["x-gateway-cache"] = lookup.Kind;
+        if (lookup.Similarity is { } similarity)
+        {
+            ctx.Response.Headers["x-gateway-cache-similarity"] = similarity.ToString("0.000", System.Globalization.CultureInfo.InvariantCulture);
+        }
+
         ctx.Response.Headers["x-gateway-model"] = hit.Model;
         ctx.Response.Headers["x-gateway-cost-micros"] = "0";
         ctx.Response.StatusCode = StatusCodes.Status200OK;
@@ -294,7 +261,8 @@ public static class ChatCompletionsEndpoint
         await ctx.Response.WriteAsync(hit.Body, ctx.RequestAborted);
 
         // Recorded with the original token counts so reports show what the hit saved.
-        usageRecorder.Record(new UsageEvent(requestId, team.Id, hit.Model, "cache", hit.PromptTokens, hit.CompletionTokens,
+        var provider = lookup.Similarity is null ? "cache" : "semantic-cache";
+        usageRecorder.Record(new UsageEvent(requestId, team.Id, hit.Model, provider, hit.PromptTokens, hit.CompletionTokens,
             CostMicros: 0, StatusCode: 200, LatencyMs: 0, Streamed: false, UsageEstimated: false, time.GetUtcNow(),
             CacheHit: true, SavedMicros: hit.CostMicros));
     }

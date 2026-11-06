@@ -13,6 +13,25 @@ public sealed class CacheOptions
     public bool DefaultOn { get; set; }
 
     public int TtlSeconds { get; set; } = 3600;
+
+    /// <summary>Also answer rephrased questions from the cache, by comparing embeddings.</summary>
+    public bool SemanticEnabled { get; set; }
+
+    /// <summary>Cosine similarity a cached question needs to count as the same question.</summary>
+    public double SimilarityThreshold { get; set; } = 0.95;
+
+    /// <summary>Questions kept per bucket (same model, system prompt and history). Oldest are dropped.</summary>
+    public int MaxEntriesPerBucket { get; set; } = 500;
+
+    public EmbeddingOptions Embeddings { get; set; } = new();
+}
+
+public sealed class EmbeddingOptions
+{
+    /// <summary>"mock", or the name of an OpenAI-compatible provider that serves /embeddings.</summary>
+    public string Provider { get; set; } = "mock";
+
+    public string Model { get; set; } = "text-embedding-3-small";
 }
 
 /// <summary>A stored answer, plus what it cost the first time (counted as saved on every hit).</summary>
@@ -36,9 +55,32 @@ public static class CacheKeys
     /// </summary>
     public static string For(string teamId, JsonObject request)
     {
-        var canonical = Canonicalize(request, topLevel: true).ToJsonString();
+        var canonical = Canonicalize(request, topLevel: true)!.ToJsonString();
         var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical))).ToLowerInvariant();
         return $"cache:{{{teamId}}}:{hash}";
+    }
+
+    /// <summary>
+    /// Bucket for semantic lookups: the request with its last user message removed. Only requests with
+    /// the same model, parameters, system prompt and earlier turns share a bucket, so a match can only
+    /// differ in how the final question was phrased. Returns null if the request doesn't end in a user message.
+    /// </summary>
+    public static (string Bucket, string Question)? SemanticBucket(string teamId, JsonObject request)
+    {
+        if (request["messages"] is not JsonArray { Count: > 0 } messages
+            || messages[^1] is not JsonObject last
+            || last["role"]?.GetValue<string>() != "user")
+        {
+            return null;
+        }
+
+        var question = Usage.TokenEstimator.ContentText(last["content"]);
+        var context = (JsonObject)request.DeepClone();
+        context["messages"]!.AsArray().RemoveAt(messages.Count - 1);
+
+        var canonical = Canonicalize(context, topLevel: true)!.ToJsonString();
+        var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical))).ToLowerInvariant();
+        return ($"scache:{{{teamId}}}:{hash}", question);
     }
 
     private static JsonNode? Canonicalize(JsonNode? node, bool topLevel = false) => node switch

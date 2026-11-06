@@ -13,6 +13,8 @@ services:
       Gateway__Providers__ollama__BaseUrl: "http://host.docker.internal:11434/v1"
       # Slow the mock down a little so streaming is visible.
       Gateway__Providers__mock__MockTokenDelayMs: "30"
+      # Semantic cache with the keyless mock embeddings; set Provider to "openai" for real ones.
+      Gateway__Cache__SemanticEnabled: "true"
       # Demo team + key so you can try it immediately. Remove for anything real.
       Gateway__Bootstrap__TeamId: "demo"
       Gateway__Bootstrap__TeamName: "Demo team"
