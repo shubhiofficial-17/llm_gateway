@@ -4,7 +4,11 @@ export const BASE = __ENV.BASE_URL || 'http://localhost:8080';
 export const KEY = __ENV.API_KEY || 'gw-demo-key';
 export const ADMIN_KEY = __ENV.ADMIN_KEY || 'dev-admin-key';
 
-/** Lift the demo team's limits so the test measures the gateway, not its rate limiter. */
+/**
+ * Lift the demo team's limits so the test measures the gateway, not its rate limiter.
+ * Team lookups are cached per key for 60s, so this must run before the key is first used
+ * (the CI workflow also does it before warming up).
+ */
 export function unlimitedDemoTeam() {
   const res = http.put(`${BASE}/admin/teams/demo/limits`,
     JSON.stringify({ requestsPerMinute: 0, tokensPerMinute: 0, monthlyBudgetUsd: 0 }),

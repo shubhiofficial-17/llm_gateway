@@ -21,6 +21,12 @@ jobs:
           for i in $(seq 60); do curl -sf localhost:8080/healthz && break; sleep 2; done
           curl -sf localhost:8080/healthz
 
+      # Lift the demo team's limits before its key is first used: team lookups are cached for 60s.
+      - name: Lift demo team limits
+        run: |
+          curl -sf -X PUT localhost:8080/admin/teams/demo/limits -H "X-Admin-Key: dev-admin-key" \
+            -H "Content-Type: application/json" -d '{"requestsPerMinute":0,"tokensPerMinute":0,"monthlyBudgetUsd":0}'
+
       - name: Warm up
         run: |
           for i in $(seq 50); do
