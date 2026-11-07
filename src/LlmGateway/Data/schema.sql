@@ -38,4 +38,8 @@ CREATE TABLE IF NOT EXISTS usage_events (
     created_at         TIMESTAMPTZ NOT NULL
 );
 
+-- Response cache: hits cost nothing; saved_micros is what the answer cost when it was first generated.
+ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS cache_hit BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS saved_micros BIGINT NOT NULL DEFAULT 0;
+
 CREATE INDEX IF NOT EXISTS ix_usage_events_team_time ON usage_events (team_id, created_at);
