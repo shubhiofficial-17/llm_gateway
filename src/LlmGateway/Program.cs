@@ -6,8 +6,12 @@ using LlmGateway.Config;
 using LlmGateway.Data;
 using LlmGateway.Limits;
 using LlmGateway.Providers;
+using LlmGateway.Telemetry;
 using LlmGateway.Usage;
 using Npgsql;
+using OpenTelemetry.Metrics;
+using OpenTelemetry.Resources;
+using OpenTelemetry.Trace;
 using StackExchange.Redis;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -70,7 +74,7 @@ builder.Services.AddSingleton<IEmbeddingProvider>(sp =>
 
 // Usage: request path -> bounded channel -> batched background writer.
 builder.Services.AddSingleton<ChannelUsageRecorder>();
-builder.Services.AddSingleton<IUsageRecorder>(sp => sp.GetRequiredService<ChannelUsageRecorder>());
+builder.Services.AddSingleton<IUsageRecorder, InstrumentedUsageRecorder>();
 builder.Services.AddHostedService<UsageWriterService>();
 
 // One named HttpClient per HTTP provider, so each gets its own base URL, timeout and connection pool.
@@ -99,6 +103,31 @@ builder.Services.AddSingleton<FallbackSender>();
 builder.Services.Configure<CircuitBreakerOptions>(gatewaySection.GetSection("CircuitBreaker"));
 builder.Services.AddSingleton<CircuitBreakers>();
 
+// Telemetry: Prometheus metrics at /metrics. Traces go over OTLP when OTEL_EXPORTER_OTLP_ENDPOINT is set;
+// metrics too if Telemetry:OtlpMetrics is true (off by default, since Prometheus scrapes them).
+builder.Services.AddSingleton<GatewayTelemetry>();
+var otlp = !string.IsNullOrWhiteSpace(builder.Configuration["OTEL_EXPORTER_OTLP_ENDPOINT"]);
+var otlpMetrics = otlp && builder.Configuration.GetValue<bool>("Telemetry:OtlpMetrics");
+builder.Services.AddOpenTelemetry()
+    .ConfigureResource(resource => resource.AddService("llm-gateway"))
+    .WithTracing(tracing =>
+    {
+        tracing.AddSource(GatewayTelemetry.Name).AddAspNetCoreInstrumentation().AddHttpClientInstrumentation();
+        if (otlp)
+        {
+            tracing.AddOtlpExporter();
+        }
+    })
+    .WithMetrics(metrics =>
+    {
+        metrics.AddMeter(GatewayTelemetry.Name).AddAspNetCoreInstrumentation().AddHttpClientInstrumentation()
+            .AddPrometheusExporter();
+        if (otlpMetrics)
+        {
+            metrics.AddOtlpExporter();
+        }
+    });
+
 var app = builder.Build();
 
 app.UseMiddleware<ApiKeyMiddleware>();
@@ -115,6 +144,9 @@ app.MapGet("/v1/models", (ProviderRegistry registry) => Results.Ok(new
 }));
 
 app.MapAdminEndpoints();
+
+// Internal: carries team names and spend, so keep it off the public internet.
+app.MapPrometheusScrapingEndpoint();
 
 app.Run();
 

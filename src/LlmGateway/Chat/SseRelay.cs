@@ -17,9 +17,9 @@ public sealed record SseRelayResult(int? PromptTokens, int? CompletionTokens, in
 public static class SseRelay
 {
     public static async Task<SseRelayResult> RelayAsync(
-        Stream upstream, Stream downstream, bool forwardUsageOnlyChunks, CancellationToken ct)
+        Stream upstream, Stream downstream, bool forwardUsageOnlyChunks, CancellationToken ct, Action? onFirstEvent = null)
     {
-        var state = new RelayState();
+        var state = new RelayState { OnFirstEvent = onFirstEvent };
         using var reader = new StreamReader(upstream, Encoding.UTF8);
 
         var eventLines = new List<string>();
@@ -80,6 +80,12 @@ public static class SseRelay
 
         if (forward)
         {
+            if (state.OnFirstEvent is { } first)
+            {
+                state.OnFirstEvent = null;
+                first();
+            }
+
             var bytes = Encoding.UTF8.GetBytes(string.Join('\n', eventLines) + "\n\n");
             await downstream.WriteAsync(bytes, ct);
             await downstream.FlushAsync(ct);
@@ -141,5 +147,6 @@ public static class SseRelay
         public int? CompletionTokens { get; set; }
         public int CompletionChars { get; set; }
         public bool SawDone { get; set; }
+        public Action? OnFirstEvent { get; set; }
     }
 }

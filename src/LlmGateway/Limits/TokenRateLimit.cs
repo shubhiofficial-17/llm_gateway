@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text.Json.Nodes;
 using LlmGateway.Auth;
+using LlmGateway.Telemetry;
 using Microsoft.Extensions.Options;
 
 namespace LlmGateway.Limits;
@@ -19,6 +20,7 @@ public sealed record TokenReservation(string Key, int Capacity, int Reserved)
 public sealed class TokenRateLimit(
     IRateLimiter limiter,
     IOptionsMonitor<RateLimitOptions> options,
+    GatewayTelemetry telemetry,
     ILogger<TokenRateLimit> logger)
 {
     /// <summary>Most completion tokens the request can produce: its max_tokens, or the configured default.</summary>
@@ -42,6 +44,7 @@ public sealed class TokenRateLimit(
         if (estimatedTokens > tpm)
         {
             // It could never fit, so a 429 would make clients retry forever.
+            telemetry.LimitRejected(team.Id, "request_too_large");
             await OpenAiError.WriteAsync(ctx, StatusCodes.Status400BadRequest,
                 $"This request may use up to {estimatedTokens} tokens, more than team '{team.Id}' is allowed per minute ({tpm}). " +
                 "Lower max_tokens or shorten the prompt.",
@@ -69,6 +72,7 @@ public sealed class TokenRateLimit(
             return new TokenReservation(key, tpm, estimatedTokens);
         }
 
+        telemetry.LimitRejected(team.Id, "tokens_per_minute");
         var retrySeconds = Math.Max(1, (int)Math.Ceiling(decision.RetryAfter.TotalSeconds));
         ctx.Response.Headers.RetryAfter = retrySeconds.ToString(CultureInfo.InvariantCulture);
         await OpenAiError.WriteAsync(ctx, StatusCodes.Status429TooManyRequests,
