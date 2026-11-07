@@ -8,6 +8,14 @@ Apps switch to it by changing one setting, the base URL. Any OpenAI SDK works un
 
 Built with .NET 8, ASP.NET Core minimal APIs, PostgreSQL, Redis and OpenTelemetry.
 
+## Results
+
+Measured in CI with k6 (details in [docs/benchmarks.md](docs/benchmarks.md)):
+
+- **Under 4 ms p99 overhead at 300 req/s** with every rate-limit, token-limit and budget check on. There were 0 failures across 18,003 requests.
+- **0 failed requests while a provider was down for 20 s** at 100 req/s. Fallbacks answered 2,516 requests, and the circuit breaker closed again once the provider came back.
+- **Cache hits answered in under 3 ms p99, at zero cost**, with the savings recorded per team and model.
+
 ## Why
 
 When many teams call LLM APIs directly:
@@ -34,7 +42,8 @@ A gateway fixes all four in one place.
 | 4a. Response cache | Opt-in exact-match cache per team; hits are free and the savings are reported | ✅ Done |
 | 4b. Semantic cache | Embedding-based cache that also answers rephrased questions, scoped so it can't cross contexts | ✅ Done |
 | 5a. Telemetry | OpenTelemetry traces and metrics: cost, tokens, latency, time to first token, fallbacks, cache, circuit state; Prometheus `/metrics` | ✅ Done |
-| 5b–5c. Dashboards and load tests | Grafana dashboard, Jaeger traces, k6 load tests, chaos demo | ⏳ Next |
+| 5b. Dashboards | Prometheus, Grafana dashboard (spend, latency, cache, fallbacks, circuits) and Jaeger traces in one compose command | ✅ Done |
+| 5c. Load tests | k6 overhead and chaos tests in CI, with measured results | ✅ Done |
 
 ## Architecture
 
@@ -109,6 +118,18 @@ curl http://localhost:8080/admin/teams/demo/usage -H "X-Admin-Key: dev-admin-key
 ```
 
 To use real models, start with your keys set, for example `OPENAI_API_KEY=sk-... ANTHROPIC_API_KEY=sk-ant-... docker compose up --build`. Then call `gpt-4o-mini` or `claude-haiku-5-5` with the same OpenAI-format request.
+
+### Dashboards and traces
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.observability.yml up --build
+```
+
+- **Grafana** at http://localhost:3000 opens the provisioned *LLM Gateway* dashboard. It shows spend by team and model, savings from the cache, error and cache-hit rates, p50/p95 latency and time to first token, circuit breaker state, fallbacks and limit rejections.
+- **Jaeger** at http://localhost:16686 shows a trace per request (service `llm-gateway`), with one span per provider call. A fallback appears as a failed span followed by a successful one.
+- **Prometheus** at http://localhost:9090 scrapes `/metrics` every 5 seconds.
+
+A test checks that every metric the dashboard queries is actually exported, so the dashboard can't silently drift from the code.
 
 ### From an OpenAI SDK
 
@@ -185,6 +206,8 @@ Each significant choice is recorded as an ADR in [`docs/adr`](docs/adr):
 
 ## Tests
 
+Unit and integration tests (111) run on every push. Load and chaos tests run in a separate workflow; see [docs/benchmarks.md](docs/benchmarks.md).
+
 ```bash
 dotnet test
 ```
@@ -210,6 +233,8 @@ src/LlmGateway
   Data/        schema.sql, startup schema initializer, bootstrap seeding
   Telemetry/   OpenTelemetry metrics and trace source
 tests/LlmGateway.Tests
+loadtest/        k6 scripts and a mock upstream for load and chaos tests
+observability/  Prometheus config, Grafana provisioning and dashboard
 docs/adr
 ```
 

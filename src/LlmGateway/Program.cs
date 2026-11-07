@@ -103,9 +103,11 @@ builder.Services.AddSingleton<FallbackSender>();
 builder.Services.Configure<CircuitBreakerOptions>(gatewaySection.GetSection("CircuitBreaker"));
 builder.Services.AddSingleton<CircuitBreakers>();
 
-// Telemetry: Prometheus metrics at /metrics, and OTLP export when OTEL_EXPORTER_OTLP_ENDPOINT is set.
+// Telemetry: Prometheus metrics at /metrics. Traces go over OTLP when OTEL_EXPORTER_OTLP_ENDPOINT is set;
+// metrics too if Telemetry:OtlpMetrics is true (off by default, since Prometheus scrapes them).
 builder.Services.AddSingleton<GatewayTelemetry>();
 var otlp = !string.IsNullOrWhiteSpace(builder.Configuration["OTEL_EXPORTER_OTLP_ENDPOINT"]);
+var otlpMetrics = otlp && builder.Configuration.GetValue<bool>("Telemetry:OtlpMetrics");
 builder.Services.AddOpenTelemetry()
     .ConfigureResource(resource => resource.AddService("llm-gateway"))
     .WithTracing(tracing =>
@@ -120,7 +122,7 @@ builder.Services.AddOpenTelemetry()
     {
         metrics.AddMeter(GatewayTelemetry.Name).AddAspNetCoreInstrumentation().AddHttpClientInstrumentation()
             .AddPrometheusExporter();
-        if (otlp)
+        if (otlpMetrics)
         {
             metrics.AddOtlpExporter();
         }

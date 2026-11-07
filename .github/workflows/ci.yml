@@ -54,3 +54,5 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build image
         run: docker build -t llm-gateway:ci .
+      - name: Check compose files
+        run: docker compose -f docker-compose.yml -f docker-compose.observability.yml config --quiet

@@ -1,0 +1,28 @@
+# Load and chaos test setup (used by .github/workflows/load-test.yml):
+#   docker compose -f docker-compose.yml -f docker-compose.loadtest.yml up -d --build
+services:
+  gateway:
+    environment:
+      Logging__LogLevel__Default: "Warning"
+      Gateway__Providers__mock__MockTokenDelayMs: "0"
+      Gateway__Cache__SemanticEnabled: "false"
+      # An HTTP provider that the chaos test can switch off, with the in-process mock as its fallback.
+      Gateway__Providers__upstream__Type: "openai-compatible"
+      Gateway__Providers__upstream__BaseUrl: "http://mock-upstream:8000/v1"
+      Gateway__Providers__upstream__TimeoutSeconds: "5"
+      Gateway__Models__upstream-1__Provider: "upstream"
+      Gateway__Models__upstream-1__InputPricePerMTok: "1"
+      Gateway__Models__upstream-1__OutputPricePerMTok: "2"
+      Gateway__Models__upstream-1__Fallbacks__0: "mock-1"
+      Gateway__CircuitBreaker__BreakSeconds: "5"
+    depends_on:
+      mock-upstream:
+        condition: service_started
+
+  mock-upstream:
+    image: python:3.12-alpine
+    command: ["python", "-u", "/app/mock_upstream.py"]
+    environment:
+      LATENCY_MS: "50"
+    volumes:
+      - ./loadtest/mock_upstream.py:/app/mock_upstream.py:ro
