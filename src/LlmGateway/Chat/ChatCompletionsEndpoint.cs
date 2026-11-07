@@ -21,6 +21,7 @@ public static class ChatCompletionsEndpoint
         IUsageRecorder usageRecorder,
         TokenRateLimit tokenLimit,
         BudgetGuard budget,
+        FallbackSender sender,
         TimeProvider time,
         ILoggerFactory loggerFactory)
     {
@@ -66,7 +67,6 @@ public static class ChatCompletionsEndpoint
                                     && ReadBool(clientStreamOptions["include_usage"]);
 
         var upstreamBody = (JsonObject)body.DeepClone();
-        upstreamBody["model"] = route.UpstreamModel;
         if (stream)
         {
             // Always ask for the usage chunk so streamed requests are billed on real token counts.
@@ -89,8 +89,9 @@ public static class ChatCompletionsEndpoint
             return; // over the team's token limit; the error has been written
         }
 
-        var budgetReservation = await budget.TryReserveAsync(ctx, team,
-            Pricing.CostMicros(route.Options, promptEstimate, maxCompletion));
+        // Reserve for the priciest model the request could end up on.
+        var worstCaseCost = route.Chain.Max(r => Pricing.CostMicros(r.Options, promptEstimate, maxCompletion));
+        var budgetReservation = await budget.TryReserveAsync(ctx, team, worstCaseCost);
         if (budgetReservation is null)
         {
             await tokenLimit.SettleAsync(reservation, actualTokens: 0);
@@ -99,9 +100,9 @@ public static class ChatCompletionsEndpoint
 
         var requestId = "req_" + Guid.NewGuid().ToString("N");
         ctx.Response.Headers["x-request-id"] = requestId;
-        ctx.Response.Headers["x-gateway-provider"] = route.Provider.Name;
 
         var started = Stopwatch.GetTimestamp();
+        var served = route;
         var status = 0;
         int? promptTokens = null;
         int? completionTokens = null;
@@ -109,29 +110,23 @@ public static class ChatCompletionsEndpoint
 
         try
         {
-            ProviderResponse upstream;
-            try
+            var sent = await sender.SendAsync(route, upstreamBody, stream, requestId, ct);
+            served = sent.Served;
+            ctx.Response.Headers["x-gateway-model"] = served.Model;
+            ctx.Response.Headers["x-gateway-provider"] = served.Provider.Name;
+            if (sent.Attempts > 1)
             {
-                upstream = await route.Provider.SendChatAsync(
-                    new ProviderRequest(requestId, route.UpstreamModel, upstreamBody, stream), ct);
+                ctx.Response.Headers["x-gateway-fallback-from"] = route.Model;
             }
-            catch (HttpRequestException ex)
+
+            if (sent.Response is null)
             {
-                status = StatusCodes.Status502BadGateway;
-                log.LogWarning(ex, "Provider {Provider} unreachable for {RequestId}", route.Provider.Name, requestId);
-                await OpenAiError.WriteAsync(ctx, status,
-                    $"Upstream provider '{route.Provider.Name}' is unreachable.", "gateway_error", "upstream_unreachable");
-                return;
-            }
-            catch (TaskCanceledException) when (!ct.IsCancellationRequested)
-            {
-                status = StatusCodes.Status504GatewayTimeout;
-                log.LogWarning("Provider {Provider} timed out for {RequestId}", route.Provider.Name, requestId);
-                await OpenAiError.WriteAsync(ctx, status,
-                    $"Upstream provider '{route.Provider.Name}' timed out.", "gateway_error", "upstream_timeout");
+                status = sent.FailureStatus;
+                await OpenAiError.WriteAsync(ctx, status, sent.FailureMessage!, "gateway_error", sent.FailureCode!);
                 return;
             }
 
+            var upstream = sent.Response;
             await using (upstream)
             {
                 status = upstream.StatusCode;
@@ -154,7 +149,7 @@ public static class ChatCompletionsEndpoint
                     if (promptTokens is { } p && completionTokens is { } c)
                     {
                         ctx.Response.Headers["x-gateway-cost-micros"] =
-                            Pricing.CostMicros(route.Options, p, c).ToString(System.Globalization.CultureInfo.InvariantCulture);
+                            Pricing.CostMicros(served.Options, p, c).ToString(System.Globalization.CultureInfo.InvariantCulture);
                     }
 
                     ctx.Response.StatusCode = status;
@@ -184,7 +179,7 @@ public static class ChatCompletionsEndpoint
         catch (IOException ex) when (ctx.Response.HasStarted)
         {
             // Upstream broke mid-stream. Headers are already sent, so all we can do is end the response.
-            log.LogWarning(ex, "Stream from {Provider} broke for {RequestId}", route.Provider.Name, requestId);
+            log.LogWarning(ex, "Stream from {Provider} broke for {RequestId}", served.Provider.Name, requestId);
         }
         finally
         {
@@ -194,7 +189,8 @@ public static class ChatCompletionsEndpoint
             var finalPrompt = billable ? promptTokens ?? promptEstimate : 0;
             var finalCompletion = billable ? completionTokens ?? TokenEstimator.FromChars(completionChars) : 0;
 
-            var cost = Pricing.CostMicros(route.Options, finalPrompt, finalCompletion);
+            // Billed at the price of the model that actually answered.
+            var cost = Pricing.CostMicros(served.Options, finalPrompt, finalCompletion);
 
             await tokenLimit.SettleAsync(reservation, finalPrompt + finalCompletion);
             await budget.SettleAsync(budgetReservation, cost);
@@ -202,8 +198,8 @@ public static class ChatCompletionsEndpoint
             usageRecorder.Record(new UsageEvent(
                 requestId,
                 team.Id,
-                route.Model,
-                route.Provider.Name,
+                served.Model,
+                served.Provider.Name,
                 finalPrompt,
                 finalCompletion,
                 cost,

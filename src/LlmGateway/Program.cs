@@ -81,6 +81,7 @@ foreach (var (name, provider) in gatewayOptions.Providers)
 }
 
 builder.Services.AddSingleton<ProviderRegistry>();
+builder.Services.AddSingleton<FallbackSender>();
 
 var app = builder.Build();
 

@@ -10,7 +10,8 @@ namespace LlmGateway.Providers;
 /// <summary>
 /// In-process fake LLM for demos, tests and load tests without API keys or cost.
 /// Replies "[mock] You said: &lt;last user message&gt;" and reports usage like OpenAI does.
-/// Put "[mock-error:503]" in the prompt to get that HTTP status back (used for fallback demos).
+/// Put "[mock-error:503]" in the prompt to get that HTTP status back, or set MockFailWithStatus
+/// to make every request fail (used for fallback demos).
 /// </summary>
 public sealed partial class MockProvider(string name, ProviderOptions options) : IChatProvider
 {
@@ -21,9 +22,9 @@ public sealed partial class MockProvider(string name, ProviderOptions options) :
         var prompt = LastUserMessage(request.Body);
 
         var error = MockErrorPattern().Match(prompt);
-        if (error.Success)
+        if (options.MockFailWithStatus is not null || error.Success)
         {
-            var status = int.Parse(error.Groups[1].Value);
+            var status = options.MockFailWithStatus ?? int.Parse(error.Groups[1].Value);
             var errorJson = new JsonObject
             {
                 ["error"] = new JsonObject

@@ -31,6 +31,9 @@ public sealed class ProviderOptions
 
     /// <summary>Mock provider only: delay between streamed chunks, to make streaming visible in demos.</summary>
     public int MockTokenDelayMs { get; set; }
+
+    /// <summary>Mock provider only: fail every request with this status, to simulate an outage.</summary>
+    public int? MockFailWithStatus { get; set; }
 }
 
 public sealed class ModelOptions
@@ -45,6 +48,9 @@ public sealed class ModelOptions
 
     /// <summary>USD per 1M output tokens.</summary>
     public decimal OutputPricePerMTok { get; set; }
+
+    /// <summary>Other public model names to try, in order, if this model's provider is down or overloaded.</summary>
+    public List<string> Fallbacks { get; set; } = new();
 }
 
 /// <summary>Optional team and API key created on startup, for local demos.</summary>
