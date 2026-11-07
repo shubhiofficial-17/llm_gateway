@@ -32,8 +32,8 @@ A gateway fixes all four in one place.
 | 3b. Fallback chains | Retry on the next model when a provider is down, overloaded or rate limited | ✅ Done |
 | 3c. Circuit breakers | Skip providers that keep failing, probe them again after a cool-down | ✅ Done |
 | 4a. Response cache | Opt-in exact-match cache per team; hits are free and the savings are reported | ✅ Done |
-| 4b. Semantic cache | Embedding-based cache that also catches rephrased questions | ⏳ Next |
-| 5. Observability | OpenTelemetry traces, Grafana cost dashboard, k6 load tests, chaos demo | Planned |
+| 4b. Semantic cache | Embedding-based cache that also answers rephrased questions, scoped so it can't cross contexts | ✅ Done |
+| 5. Observability | OpenTelemetry traces, Grafana cost dashboard, k6 load tests, chaos demo | ⏳ Next |
 
 ## Architecture
 
@@ -98,6 +98,11 @@ curl http://localhost:8080/v1/chat/completions \
   -H "Authorization: Bearer gw-demo-key" -H "Content-Type: application/json" -H "x-gateway-cache: on" \
   -d '{"model":"mock-1","messages":[{"role":"user","content":"Cache this"}]}' -i
 
+# Semantic cache (on in Docker Compose): a rephrased question is a hit too
+curl http://localhost:8080/v1/chat/completions \
+  -H "Authorization: Bearer gw-demo-key" -H "Content-Type: application/json" -H "x-gateway-cache: on" \
+  -d '{"model":"mock-1","messages":[{"role":"user","content":"cache THIS!"}]}' -i
+
 # This month's spend for the team, including cache hits and money saved
 curl http://localhost:8080/admin/teams/demo/usage -H "X-Admin-Key: dev-admin-key"
 ```
@@ -133,7 +138,7 @@ for chunk in stream:
 | `GET /admin/teams/{id}/usage?from=&to=` | Admin key | Requests, tokens and cost per model. Defaults to the current month |
 | `GET /healthz` | None | Liveness |
 
-Responses include `x-request-id`, `x-gateway-model` and `x-gateway-provider`, plus `x-gateway-fallback-from` when a fallback answered. Send `x-gateway-cache: on` to use the response cache; the response then carries `x-gateway-cache: hit` or `miss`. Non-streaming responses also include `x-gateway-cost-micros`. Errors use OpenAI's error format, so SDKs raise their normal exceptions.
+Responses include `x-request-id`, `x-gateway-model` and `x-gateway-provider`, plus `x-gateway-fallback-from` when a fallback answered. Send `x-gateway-cache: on` to use the response cache; the response then carries `x-gateway-cache: hit`, `semantic-hit` or `miss`. Non-streaming responses also include `x-gateway-cost-micros`. Errors use OpenAI's error format, so SDKs raise their normal exceptions.
 
 ## Configuration
 
@@ -173,6 +178,7 @@ Each significant choice is recorded as an ADR in [`docs/adr`](docs/adr):
 - [0009 – Fallback chains between models](docs/adr/0009-fallback-chains.md)
 - [0010 – Circuit breakers per provider](docs/adr/0010-circuit-breakers.md)
 - [0011 – Exact-match response cache](docs/adr/0011-exact-match-cache.md)
+- [0012 – Semantic cache: embeddings compared within a narrow bucket](docs/adr/0012-semantic-cache.md)
 
 ## Tests
 
@@ -195,7 +201,8 @@ src/LlmGateway
   Chat/        /v1/chat/completions endpoint, SSE relay
   Providers/   provider interface, OpenAI-compatible, Anthropic and mock providers, model registry
   Usage/       usage recorder (channel), background writer, stores, pricing, token estimates
-  Caching/     response cache (Redis + in-memory), cache keys
+  Caching/     exact and semantic response caches, embeddings, cache keys
+  Limits/      rate limits, token limits and budgets (Redis Lua scripts + in-memory versions)
   Admin/       admin endpoints and admin key filter
   Data/        schema.sql, startup schema initializer, bootstrap seeding
 tests/LlmGateway.Tests
