@@ -26,7 +26,8 @@ A gateway fixes all four in one place.
 | 1. Core proxy | OpenAI-compatible API, SSE streaming, per-team API keys, usage and cost ledger, mock provider, Docker Compose, CI | ✅ Done |
 | 2a. Request rate limits | Per-team requests-per-minute token bucket in Redis (atomic Lua), 429 + Retry-After | ✅ Done |
 | 2b. Per-team overrides | Admin endpoint to give a team its own requests-per-minute limit | ✅ Done |
-| 2c–2d. Token limits and budgets | Tokens-per-minute limits, monthly budgets (reserve then settle) | ⏳ Next |
+| 2c. Token limits | Tokens-per-minute limit: reserve an estimate up front, refund the unused part afterwards | ✅ Done |
+| 2d. Budgets | Monthly spend budgets per team (reserve then settle) | ⏳ Next |
 | 3. Reliability | Anthropic adapter, provider fallback chains, circuit breakers, retries | Planned |
 | 4. Semantic cache | Embedding-based response cache with a tuned similarity threshold | Planned |
 | 5. Observability | OpenTelemetry traces, Grafana cost dashboard, k6 load tests, chaos demo | Planned |
@@ -53,7 +54,8 @@ flowchart LR
 How a request flows:
 
 1. `ApiKeyMiddleware` hashes the bearer key, looks up the team (cached for 60s) and rejects unknown keys.
-1. `RateLimitMiddleware` takes a token from the team's bucket in Redis, or returns `429` with `Retry-After`.
+1. `RateLimitMiddleware` takes a token from the team's request bucket in Redis, or returns `429` with `Retry-After`.
+1. The endpoint reserves the request's worst-case token count from the team's token bucket. Once the real count is known, the unused part is refunded.
 2. The model name is resolved to a provider and the upstream model name, and the request body is rewritten.
 3. For streaming requests the gateway always asks upstream for a final usage chunk, so it can bill real token counts.
 4. `SseRelay` forwards each event as soon as it arrives, reads usage on the way through and drops the usage chunk if the client didn't ask for it.
@@ -146,6 +148,7 @@ Each significant choice is recorded as an ADR in [`docs/adr`](docs/adr):
 - [0003 – Store API keys as SHA-256 hashes](docs/adr/0003-api-key-hashing.md)
 - [0004 – Bill streamed requests from the provider's usage chunk](docs/adr/0004-billing-streamed-requests.md)
 - [0005 – Per-team rate limits with a Redis token bucket](docs/adr/0005-rate-limiting.md)
+- [0006 – Tokens-per-minute limits: reserve an estimate, refund the rest](docs/adr/0006-token-rate-limits.md)
 
 ## Tests
 

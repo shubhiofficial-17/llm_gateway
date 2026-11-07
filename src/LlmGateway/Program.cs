@@ -48,6 +48,8 @@ else
     builder.Services.AddSingleton<IRateLimiter, InMemoryRateLimiter>();
 }
 
+builder.Services.AddSingleton<TokenRateLimit>();
+
 // Usage: request path -> bounded channel -> batched background writer.
 builder.Services.AddSingleton<ChannelUsageRecorder>();
 builder.Services.AddSingleton<IUsageRecorder>(sp => sp.GetRequiredService<ChannelUsageRecorder>());

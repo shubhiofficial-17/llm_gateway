@@ -13,7 +13,7 @@ public sealed record CreateTeamRequest(string Id, string Name);
 public sealed record CreateKeyRequest(string? Label);
 
 /// <summary>Null clears an override so the team uses the gateway default. 0 means unlimited.</summary>
-public sealed record SetLimitsRequest(int? RequestsPerMinute);
+public sealed record SetLimitsRequest(int? RequestsPerMinute, int? TokensPerMinute);
 
 public sealed record CreateKeyResponse(string TeamId, string ApiKey, string? Label, string Note);
 
@@ -47,15 +47,24 @@ public static partial class AdminEndpoints
         // Changes reach requests within a minute: team lookups are cached per API key for 60s.
         admin.MapPut("/teams/{teamId}/limits", async (string teamId, SetLimitsRequest request, ITeamStore teams, CancellationToken ct) =>
         {
+            var errors = new Dictionary<string, string[]>();
             if (request.RequestsPerMinute is < 0)
             {
-                return Results.ValidationProblem(new Dictionary<string, string[]>
-                {
-                    ["requestsPerMinute"] = ["Must be 0 (unlimited) or more, or null for the default."],
-                });
+                errors["requestsPerMinute"] = ["Must be 0 (unlimited) or more, or null for the default."];
             }
 
-            return await teams.SetLimitsAsync(teamId, request.RequestsPerMinute, ct) is { } team
+            if (request.TokensPerMinute is < 0)
+            {
+                errors["tokensPerMinute"] = ["Must be 0 (unlimited) or more, or null for the default."];
+            }
+
+            if (errors.Count > 0)
+            {
+                return Results.ValidationProblem(errors);
+            }
+
+            // PUT replaces all overrides: a field left out goes back to the default.
+            return await teams.SetLimitsAsync(teamId, request.RequestsPerMinute, request.TokensPerMinute, ct) is { } team
                 ? Results.Ok(team)
                 : Results.NotFound(new { error = $"Team '{teamId}' not found." });
         });
