@@ -8,7 +8,19 @@ namespace LlmGateway.Auth;
 
 /// <param name="RequestsPerMinute">Per-team override; null means the gateway default.</param>
 /// <param name="TokensPerMinute">Per-team override; null means the gateway default.</param>
-public sealed record Team(string Id, string Name, int? RequestsPerMinute = null, int? TokensPerMinute = null);
+/// <param name="MonthlyBudgetMicros">Per-team override in micro-USD; null means the gateway default.</param>
+public sealed record Team(
+    string Id,
+    string Name,
+    int? RequestsPerMinute = null,
+    int? TokensPerMinute = null,
+    long? MonthlyBudgetMicros = null)
+{
+    public TeamLimits Limits => new(RequestsPerMinute, TokensPerMinute, MonthlyBudgetMicros);
+}
+
+/// <summary>Per-team overrides. Null fields fall back to the gateway defaults.</summary>
+public sealed record TeamLimits(int? RequestsPerMinute, int? TokensPerMinute, long? MonthlyBudgetMicros);
 
 public static class ApiKeys
 {
@@ -35,7 +47,7 @@ public interface ITeamStore
     Task AddKeyAsync(string teamId, byte[] keyHash, string? label, CancellationToken ct);
 
     /// <summary>Sets the team's limit overrides. Returns the updated team, or null if it doesn't exist.</summary>
-    Task<Team?> SetLimitsAsync(string teamId, int? requestsPerMinute, int? tokensPerMinute, CancellationToken ct);
+    Task<Team?> SetLimitsAsync(string teamId, TeamLimits limits, CancellationToken ct);
 }
 
 public sealed class PostgresTeamStore(NpgsqlDataSource db) : ITeamStore
@@ -44,7 +56,7 @@ public sealed class PostgresTeamStore(NpgsqlDataSource db) : ITeamStore
     {
         await using var cmd = db.CreateCommand(
             """
-            SELECT t.id, t.name, t.requests_per_minute, t.tokens_per_minute
+            SELECT t.id, t.name, t.requests_per_minute, t.tokens_per_minute, t.monthly_budget_micros
             FROM api_keys k
             JOIN teams t ON t.id = k.team_id
             WHERE k.key_hash = $1 AND k.revoked_at IS NULL
@@ -57,7 +69,7 @@ public sealed class PostgresTeamStore(NpgsqlDataSource db) : ITeamStore
 
     public async Task<Team?> GetTeamAsync(string teamId, CancellationToken ct)
     {
-        await using var cmd = db.CreateCommand("SELECT id, name, requests_per_minute, tokens_per_minute FROM teams WHERE id = $1");
+        await using var cmd = db.CreateCommand("SELECT id, name, requests_per_minute, tokens_per_minute, monthly_budget_micros FROM teams WHERE id = $1");
         cmd.Parameters.Add(new NpgsqlParameter { Value = teamId, NpgsqlDbType = NpgsqlDbType.Text });
 
         await using var reader = await cmd.ExecuteReaderAsync(ct);
@@ -83,17 +95,18 @@ public sealed class PostgresTeamStore(NpgsqlDataSource db) : ITeamStore
         await cmd.ExecuteNonQueryAsync(ct);
     }
 
-    public async Task<Team?> SetLimitsAsync(string teamId, int? requestsPerMinute, int? tokensPerMinute, CancellationToken ct)
+    public async Task<Team?> SetLimitsAsync(string teamId, TeamLimits limits, CancellationToken ct)
     {
         await using var cmd = db.CreateCommand(
             """
-            UPDATE teams SET requests_per_minute = $2, tokens_per_minute = $3
+            UPDATE teams SET requests_per_minute = $2, tokens_per_minute = $3, monthly_budget_micros = $4
             WHERE id = $1
-            RETURNING id, name, requests_per_minute, tokens_per_minute
+            RETURNING id, name, requests_per_minute, tokens_per_minute, monthly_budget_micros
             """);
         cmd.Parameters.Add(new NpgsqlParameter { Value = teamId, NpgsqlDbType = NpgsqlDbType.Text });
-        cmd.Parameters.Add(new NpgsqlParameter { Value = (object?)requestsPerMinute ?? DBNull.Value, NpgsqlDbType = NpgsqlDbType.Integer });
-        cmd.Parameters.Add(new NpgsqlParameter { Value = (object?)tokensPerMinute ?? DBNull.Value, NpgsqlDbType = NpgsqlDbType.Integer });
+        cmd.Parameters.Add(new NpgsqlParameter { Value = (object?)limits.RequestsPerMinute ?? DBNull.Value, NpgsqlDbType = NpgsqlDbType.Integer });
+        cmd.Parameters.Add(new NpgsqlParameter { Value = (object?)limits.TokensPerMinute ?? DBNull.Value, NpgsqlDbType = NpgsqlDbType.Integer });
+        cmd.Parameters.Add(new NpgsqlParameter { Value = (object?)limits.MonthlyBudgetMicros ?? DBNull.Value, NpgsqlDbType = NpgsqlDbType.Bigint });
 
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         return await reader.ReadAsync(ct) ? ReadTeam(reader) : null;
@@ -102,7 +115,8 @@ public sealed class PostgresTeamStore(NpgsqlDataSource db) : ITeamStore
     private static Team ReadTeam(NpgsqlDataReader reader) =>
         new(reader.GetString(0), reader.GetString(1),
             reader.IsDBNull(2) ? null : reader.GetInt32(2),
-            reader.IsDBNull(3) ? null : reader.GetInt32(3));
+            reader.IsDBNull(3) ? null : reader.GetInt32(3),
+            reader.IsDBNull(4) ? null : reader.GetInt64(4));
 }
 
 /// <summary>Used when no Postgres connection string is configured (tests, quick local runs).</summary>
@@ -129,11 +143,16 @@ public sealed class InMemoryTeamStore : ITeamStore
         return Task.CompletedTask;
     }
 
-    public Task<Team?> SetLimitsAsync(string teamId, int? requestsPerMinute, int? tokensPerMinute, CancellationToken ct)
+    public Task<Team?> SetLimitsAsync(string teamId, TeamLimits limits, CancellationToken ct)
     {
         while (_teams.TryGetValue(teamId, out var existing))
         {
-            var updated = existing with { RequestsPerMinute = requestsPerMinute, TokensPerMinute = tokensPerMinute };
+            var updated = existing with
+            {
+                RequestsPerMinute = limits.RequestsPerMinute,
+                TokensPerMinute = limits.TokensPerMinute,
+                MonthlyBudgetMicros = limits.MonthlyBudgetMicros,
+            };
             if (_teams.TryUpdate(teamId, updated, existing))
             {
                 return Task.FromResult<Team?>(updated);

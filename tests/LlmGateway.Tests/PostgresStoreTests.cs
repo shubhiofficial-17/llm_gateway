@@ -70,12 +70,14 @@ public sealed class PostgresStoreTests(PostgresFixture db) : IClassFixture<Postg
         await store.UpsertTeamAsync(new Team(teamId, "Search"), CancellationToken.None);
         await store.AddKeyAsync(teamId, ApiKeys.Hash(apiKey), null, CancellationToken.None);
 
-        Assert.Equal(new Team(teamId, "Search", 300, 50_000), await store.SetLimitsAsync(teamId, 300, 50_000, CancellationToken.None));
+        var limits = new TeamLimits(300, 50_000, 25_000_000);
+        Assert.Equal(new Team(teamId, "Search", 300, 50_000, 25_000_000), await store.SetLimitsAsync(teamId, limits, CancellationToken.None));
         await store.UpsertTeamAsync(new Team(teamId, "Search v2"), CancellationToken.None);
-        Assert.Equal(new Team(teamId, "Search v2", 300, 50_000), await store.FindTeamByKeyHashAsync(ApiKeys.Hash(apiKey), CancellationToken.None));
+        Assert.Equal(limits, (await store.FindTeamByKeyHashAsync(ApiKeys.Hash(apiKey), CancellationToken.None))!.Limits);
 
-        Assert.Equal(new Team(teamId, "Search v2"), await store.SetLimitsAsync(teamId, null, null, CancellationToken.None));
-        Assert.Null(await store.SetLimitsAsync("no-such-team", 5, 5, CancellationToken.None));
+        var cleared = new TeamLimits(null, null, null);
+        Assert.Equal(new Team(teamId, "Search v2"), await store.SetLimitsAsync(teamId, cleared, CancellationToken.None));
+        Assert.Null(await store.SetLimitsAsync("no-such-team", limits, CancellationToken.None));
     }
 
     [Fact]

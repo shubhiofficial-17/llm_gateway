@@ -13,7 +13,7 @@ public sealed record CreateTeamRequest(string Id, string Name);
 public sealed record CreateKeyRequest(string? Label);
 
 /// <summary>Null clears an override so the team uses the gateway default. 0 means unlimited.</summary>
-public sealed record SetLimitsRequest(int? RequestsPerMinute, int? TokensPerMinute);
+public sealed record SetLimitsRequest(int? RequestsPerMinute, int? TokensPerMinute, decimal? MonthlyBudgetUsd);
 
 public sealed record CreateKeyResponse(string TeamId, string ApiKey, string? Label, string Note);
 
@@ -58,13 +58,22 @@ public static partial class AdminEndpoints
                 errors["tokensPerMinute"] = ["Must be 0 (unlimited) or more, or null for the default."];
             }
 
+            if (request.MonthlyBudgetUsd is < 0)
+            {
+                errors["monthlyBudgetUsd"] = ["Must be 0 (no budget) or more, or null for the default."];
+            }
+
             if (errors.Count > 0)
             {
                 return Results.ValidationProblem(errors);
             }
 
             // PUT replaces all overrides: a field left out goes back to the default.
-            return await teams.SetLimitsAsync(teamId, request.RequestsPerMinute, request.TokensPerMinute, ct) is { } team
+            var limits = new TeamLimits(
+                request.RequestsPerMinute,
+                request.TokensPerMinute,
+                request.MonthlyBudgetUsd is { } usd ? (long)(usd * 1_000_000m) : null);
+            return await teams.SetLimitsAsync(teamId, limits, ct) is { } team
                 ? Results.Ok(team)
                 : Results.NotFound(new { error = $"Team '{teamId}' not found." });
         });

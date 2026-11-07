@@ -42,13 +42,17 @@ if (!string.IsNullOrWhiteSpace(redis))
     builder.Services.AddSingleton<IConnectionMultiplexer>(_ =>
         ConnectionMultiplexer.Connect(redis + ",abortConnect=false"));
     builder.Services.AddSingleton<IRateLimiter, RedisRateLimiter>();
+    builder.Services.AddSingleton<IBudgetStore, RedisBudgetStore>();
 }
 else
 {
     builder.Services.AddSingleton<IRateLimiter, InMemoryRateLimiter>();
+    builder.Services.AddSingleton<IBudgetStore, InMemoryBudgetStore>();
 }
 
 builder.Services.AddSingleton<TokenRateLimit>();
+builder.Services.Configure<BudgetOptions>(gatewaySection.GetSection("Budgets"));
+builder.Services.AddSingleton<BudgetGuard>();
 
 // Usage: request path -> bounded channel -> batched background writer.
 builder.Services.AddSingleton<ChannelUsageRecorder>();
