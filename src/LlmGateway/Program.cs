@@ -82,6 +82,8 @@ foreach (var (name, provider) in gatewayOptions.Providers)
 
 builder.Services.AddSingleton<ProviderRegistry>();
 builder.Services.AddSingleton<FallbackSender>();
+builder.Services.Configure<CircuitBreakerOptions>(gatewaySection.GetSection("CircuitBreaker"));
+builder.Services.AddSingleton<CircuitBreakers>();
 
 var app = builder.Build();
 

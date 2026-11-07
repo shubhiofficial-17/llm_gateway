@@ -65,6 +65,8 @@ public sealed class ProviderRegistry
     public static bool UsesHttp(ProviderOptions provider) =>
         provider.Type.ToLowerInvariant() is "openai-compatible" or "anthropic";
 
+    public IEnumerable<string> ProviderNames => _providers.Keys.Order(StringComparer.Ordinal);
+
     public IEnumerable<(string Model, string Provider)> Models =>
         _models.OrderBy(m => m.Key, StringComparer.Ordinal).Select(m => (m.Key, m.Value.Provider));
 
