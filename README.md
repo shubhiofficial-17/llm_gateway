@@ -25,7 +25,8 @@ A gateway fixes all four in one place.
 |---|---|---|
 | 1. Core proxy | OpenAI-compatible API, SSE streaming, per-team API keys, usage and cost ledger, mock provider, Docker Compose, CI | ✅ Done |
 | 2a. Request rate limits | Per-team requests-per-minute token bucket in Redis (atomic Lua), 429 + Retry-After | ✅ Done |
-| 2b–2d. Limits and budgets | Per-team overrides, tokens-per-minute limits, monthly budgets (reserve then settle) | ⏳ Next |
+| 2b. Per-team overrides | Admin endpoint to give a team its own requests-per-minute limit | ✅ Done |
+| 2c–2d. Token limits and budgets | Tokens-per-minute limits, monthly budgets (reserve then settle) | ⏳ Next |
 | 3. Reliability | Anthropic adapter, provider fallback chains, circuit breakers, retries | Planned |
 | 4. Semantic cache | Embedding-based response cache with a tuned similarity threshold | Planned |
 | 5. Observability | OpenTelemetry traces, Grafana cost dashboard, k6 load tests, chaos demo | Planned |
@@ -109,6 +110,8 @@ for chunk in stream:
 | `POST /v1/chat/completions` | Team key | OpenAI-compatible chat completions, streaming and non-streaming |
 | `GET /v1/models` | Team key | Models this gateway serves |
 | `POST /admin/teams` | Admin key | Create or rename a team: `{"id":"payments","name":"Payments"}` |
+| `GET /admin/teams/{id}` | Admin key | Team details, including limit overrides |
+| `PUT /admin/teams/{id}/limits` | Admin key | Override limits: `{"requestsPerMinute":300}`. `null` restores the default, `0` means unlimited |
 | `POST /admin/teams/{id}/keys` | Admin key | Issue an API key. It is shown once; only its SHA-256 hash is stored |
 | `GET /admin/teams/{id}/usage?from=&to=` | Admin key | Requests, tokens and cost per model. Defaults to the current month |
 | `GET /healthz` | None | Liveness |

@@ -62,6 +62,23 @@ public sealed class PostgresStoreTests(PostgresFixture db) : IClassFixture<Postg
     }
 
     [Fact]
+    public async Task Limit_overrides_are_stored_and_survive_renames()
+    {
+        var store = new PostgresTeamStore(db.DataSource);
+        var teamId = "team-" + Guid.NewGuid().ToString("N")[..8];
+        var apiKey = ApiKeys.Generate();
+        await store.UpsertTeamAsync(new Team(teamId, "Search"), CancellationToken.None);
+        await store.AddKeyAsync(teamId, ApiKeys.Hash(apiKey), null, CancellationToken.None);
+
+        Assert.Equal(new Team(teamId, "Search", 300), await store.SetLimitsAsync(teamId, 300, CancellationToken.None));
+        await store.UpsertTeamAsync(new Team(teamId, "Search v2"), CancellationToken.None);
+        Assert.Equal(new Team(teamId, "Search v2", 300), await store.FindTeamByKeyHashAsync(ApiKeys.Hash(apiKey), CancellationToken.None));
+
+        Assert.Equal(new Team(teamId, "Search v2", null), await store.SetLimitsAsync(teamId, null, CancellationToken.None));
+        Assert.Null(await store.SetLimitsAsync("no-such-team", 5, CancellationToken.None));
+    }
+
+    [Fact]
     public async Task Usage_batch_is_written_with_copy_and_summarised_per_model()
     {
         var store = new PostgresUsageStore(db.DataSource);

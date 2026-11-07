@@ -13,14 +13,20 @@ public sealed class RateLimitMiddleware(RequestDelegate next, ILogger<RateLimitM
 {
     public async Task InvokeAsync(HttpContext ctx, IRateLimiter limiter, IOptionsMonitor<RateLimitOptions> options)
     {
-        var rpm = options.CurrentValue.RequestsPerMinute;
-        if (rpm <= 0 || !IsChatCompletion(ctx.Request))
+        if (!IsChatCompletion(ctx.Request))
         {
             await next(ctx);
             return;
         }
 
         var team = ctx.GetTeam();
+        var rpm = team.RequestsPerMinute ?? options.CurrentValue.RequestsPerMinute;
+        if (rpm <= 0)
+        {
+            await next(ctx);
+            return;
+        }
+
         RateLimitDecision decision;
         try
         {
