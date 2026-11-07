@@ -1,4 +1,5 @@
 using LlmGateway.Config;
+using LlmGateway.Providers.Anthropic;
 using Microsoft.Extensions.Options;
 
 namespace LlmGateway.Providers;
@@ -11,13 +12,14 @@ public sealed class ProviderRegistry
     private readonly Dictionary<string, IChatProvider> _providers = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, ModelOptions> _models = new(StringComparer.OrdinalIgnoreCase);
 
-    public ProviderRegistry(IOptions<GatewayOptions> options, IHttpClientFactory httpClientFactory)
+    public ProviderRegistry(IOptions<GatewayOptions> options, IHttpClientFactory httpClientFactory, ILoggerFactory loggerFactory)
     {
         foreach (var (name, provider) in options.Value.Providers)
         {
             _providers[name] = provider.Type.ToLowerInvariant() switch
             {
                 "openai-compatible" => new OpenAiCompatibleProvider(name, provider, httpClientFactory),
+                "anthropic" => new AnthropicProvider(name, provider, httpClientFactory, loggerFactory.CreateLogger<AnthropicProvider>()),
                 "mock" => new MockProvider(name, provider),
                 var type => throw new InvalidOperationException($"Provider '{name}' has unknown type '{type}'."),
             };
@@ -33,6 +35,9 @@ public sealed class ProviderRegistry
             _models[name] = model;
         }
     }
+
+    public static bool UsesHttp(ProviderOptions provider) =>
+        provider.Type.ToLowerInvariant() is "openai-compatible" or "anthropic";
 
     public IEnumerable<(string Model, string Provider)> Models =>
         _models.OrderBy(m => m.Key, StringComparer.Ordinal).Select(m => (m.Key, m.Value.Provider));

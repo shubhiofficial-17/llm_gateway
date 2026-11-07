@@ -59,11 +59,11 @@ builder.Services.AddSingleton<ChannelUsageRecorder>();
 builder.Services.AddSingleton<IUsageRecorder>(sp => sp.GetRequiredService<ChannelUsageRecorder>());
 builder.Services.AddHostedService<UsageWriterService>();
 
-// One named HttpClient per OpenAI-compatible provider, so each gets its own base URL, timeout and pool.
+// One named HttpClient per HTTP provider, so each gets its own base URL, timeout and connection pool.
 var gatewayOptions = gatewaySection.Get<GatewayOptions>() ?? new GatewayOptions();
 foreach (var (name, provider) in gatewayOptions.Providers)
 {
-    if (!string.Equals(provider.Type, "openai-compatible", StringComparison.OrdinalIgnoreCase))
+    if (!ProviderRegistry.UsesHttp(provider))
     {
         continue;
     }

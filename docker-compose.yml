@@ -8,6 +8,7 @@ services:
       ConnectionStrings__Redis: "redis:6379"
       Gateway__AdminKey: "${GATEWAY_ADMIN_KEY:-dev-admin-key}"
       Gateway__Providers__openai__ApiKey: "${OPENAI_API_KEY:-}"
+      Gateway__Providers__anthropic__ApiKey: "${ANTHROPIC_API_KEY:-}"
       # Reach Ollama running on your machine (if you have it).
       Gateway__Providers__ollama__BaseUrl: "http://host.docker.internal:11434/v1"
       # Slow the mock down a little so streaming is visible.

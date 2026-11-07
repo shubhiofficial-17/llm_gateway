@@ -17,7 +17,7 @@ public sealed class GatewayOptions
 
 public sealed class ProviderOptions
 {
-    /// <summary>"openai-compatible" (OpenAI, Ollama, Groq, vLLM...) or "mock".</summary>
+    /// <summary>"openai-compatible" (OpenAI, Ollama, Groq, vLLM...), "anthropic" or "mock".</summary>
     public string Type { get; set; } = "openai-compatible";
 
     public string? BaseUrl { get; set; }
@@ -25,6 +25,9 @@ public sealed class ProviderOptions
     public string? ApiKey { get; set; }
 
     public int TimeoutSeconds { get; set; } = 120;
+
+    /// <summary>Anthropic only: max_tokens sent when the client didn't set one (Anthropic requires it).</summary>
+    public int DefaultMaxTokens { get; set; } = 1024;
 
     /// <summary>Mock provider only: delay between streamed chunks, to make streaming visible in demos.</summary>
     public int MockTokenDelayMs { get; set; }

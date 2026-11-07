@@ -3,7 +3,7 @@ using System.Text;
 
 namespace LlmGateway.Tests.Infrastructure;
 
-public sealed record CapturedRequest(Uri? Uri, string? Authorization, string Body);
+public sealed record CapturedRequest(Uri? Uri, string? Authorization, string Body, IReadOnlyDictionary<string, string> Headers);
 
 /// <summary>Stands in for an OpenAI-compatible provider over HTTP.</summary>
 public sealed class FakeUpstreamHandler : HttpMessageHandler
@@ -27,7 +27,8 @@ public sealed class FakeUpstreamHandler : HttpMessageHandler
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
         var body = request.Content is null ? "" : await request.Content.ReadAsStringAsync(cancellationToken);
-        var captured = new CapturedRequest(request.RequestUri, request.Headers.Authorization?.ToString(), body);
+        var headers = request.Headers.ToDictionary(h => h.Key.ToLowerInvariant(), h => string.Join(",", h.Value));
+        var captured = new CapturedRequest(request.RequestUri, request.Headers.Authorization?.ToString(), body, headers);
         lock (_requests)
         {
             _requests.Add(captured);
@@ -37,6 +38,11 @@ public sealed class FakeUpstreamHandler : HttpMessageHandler
     }
 
     public static HttpResponseMessage Json(HttpStatusCode status, string json) => new(status)
+    {
+        Content = new StringContent(json, Encoding.UTF8, "application/json"),
+    };
+
+    public static HttpResponseMessage Status(int status, string json) => new((HttpStatusCode)status)
     {
         Content = new StringContent(json, Encoding.UTF8, "application/json"),
     };

@@ -28,7 +28,8 @@ A gateway fixes all four in one place.
 | 2b. Per-team overrides | Admin endpoint to give a team its own requests-per-minute limit | ✅ Done |
 | 2c. Token limits | Tokens-per-minute limit: reserve an estimate up front, refund the unused part afterwards | ✅ Done |
 | 2d. Budgets | Monthly spend budgets per team: reserve then settle, crash-safe, rebuilt from the ledger, fail closed | ✅ Done |
-| 3. Reliability | Anthropic adapter, provider fallback chains, circuit breakers, retries | ⏳ Next |
+| 3a. Anthropic adapter | Claude models through the same OpenAI API, streaming included | ✅ Done |
+| 3b–3c. Reliability | Provider fallback chains, circuit breakers, retries | ⏳ Next |
 | 4. Semantic cache | Embedding-based response cache with a tuned similarity threshold | Planned |
 | 5. Observability | OpenTelemetry traces, Grafana cost dashboard, k6 load tests, chaos demo | Planned |
 
@@ -45,6 +46,7 @@ flowchart LR
         Relay --> Rec[Usage recorder<br/>bounded channel]
     end
     Route --> P1[OpenAI]
+    Route --> P4[Anthropic<br/>via format adapter]
     Route --> P2[Ollama / any OpenAI-compatible]
     Route --> P3[Mock provider]
     Rec -->|batched binary COPY| DB[(Postgres<br/>usage ledger)]
@@ -88,7 +90,7 @@ curl -N http://localhost:8080/v1/chat/completions \
 curl http://localhost:8080/admin/teams/demo/usage -H "X-Admin-Key: dev-admin-key"
 ```
 
-To use real OpenAI models, start with your key set: `OPENAI_API_KEY=sk-... docker compose up --build`, then call `gpt-4o-mini`.
+To use real models, start with your keys set, for example `OPENAI_API_KEY=sk-... ANTHROPIC_API_KEY=sk-ant-... docker compose up --build`. Then call `gpt-4o-mini` or `claude-haiku-5-5` with the same OpenAI-format request.
 
 ### From an OpenAI SDK
 
@@ -126,7 +128,8 @@ Providers and models are configured in `appsettings.json` or environment variabl
 
 ```jsonc
 "Providers": {
-  "openai": { "Type": "openai-compatible", "BaseUrl": "https://api.openai.com/v1", "ApiKey": "" },
+  "openai":    { "Type": "openai-compatible", "BaseUrl": "https://api.openai.com/v1", "ApiKey": "" },
+  "anthropic": { "Type": "anthropic", "BaseUrl": "https://api.anthropic.com/v1", "ApiKey": "" },
   "ollama": { "Type": "openai-compatible", "BaseUrl": "http://localhost:11434/v1" },
   "mock":   { "Type": "mock" }
 },
@@ -135,7 +138,7 @@ Providers and models are configured in `appsettings.json` or environment variabl
 }
 ```
 
-`openai-compatible` covers any API that speaks OpenAI's format: OpenAI, Ollama, Groq, vLLM, LM Studio. Prices are USD per million tokens. Check them against your provider's pricing page.
+`openai-compatible` covers any API that speaks OpenAI's format: OpenAI, Ollama, Groq, vLLM, LM Studio. `anthropic` translates to and from Claude's Messages API, text only for now. Prices are USD per million tokens. Check them against your provider's pricing page.
 
 Without a `ConnectionStrings:Postgres` value the gateway uses in-memory stores. That's handy for `dotnet run`, but nothing survives a restart.
 
@@ -150,6 +153,7 @@ Each significant choice is recorded as an ADR in [`docs/adr`](docs/adr):
 - [0005 – Per-team rate limits with a Redis token bucket](docs/adr/0005-rate-limiting.md)
 - [0006 – Tokens-per-minute limits: reserve an estimate, refund the rest](docs/adr/0006-token-rate-limits.md)
 - [0007 – Monthly budgets: reserve, settle, and fail closed](docs/adr/0007-monthly-budgets.md)
+- [0008 – Serve Claude models through an OpenAI-format adapter](docs/adr/0008-anthropic-adapter.md)
 
 ## Tests
 
@@ -170,7 +174,7 @@ dotnet test
 src/LlmGateway
   Auth/        API key middleware, team stores (Postgres + in-memory)
   Chat/        /v1/chat/completions endpoint, SSE relay
-  Providers/   provider interface, OpenAI-compatible + mock providers, model registry
+  Providers/   provider interface, OpenAI-compatible, Anthropic and mock providers, model registry
   Usage/       usage recorder (channel), background writer, stores, pricing, token estimates
   Admin/       admin endpoints and admin key filter
   Data/        schema.sql, startup schema initializer, bootstrap seeding
